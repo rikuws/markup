@@ -22,7 +22,7 @@ final class CaptureCoordinator {
         guard let captured = capturer.captureActiveWindow() else {
             showAlert(
                 title: "Could Not Capture Screen",
-                message: "Focus the app window and try again. If this keeps happening, check Screen Recording and Accessibility permissions for punchlist."
+                message: "Focus the app window and try again. If this keeps happening, check Screen Recording and Accessibility permissions for Markup."
             )
             return
         }
@@ -114,7 +114,7 @@ final class CaptureCoordinator {
                 originalImage: originalImage,
                 recordingURL: recordingURL
             )
-            NSLog("punchlist: saved feedback bundle to \(url.path)")
+            NSLog("Markup: saved feedback bundle to \(url.path)")
             NSSound(named: "Glass")?.play()
             NSWorkspace.shared.noteFileSystemChanged(url.path)
         } catch {
@@ -169,13 +169,13 @@ final class CaptureCoordinator {
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Use Default")
 
-        let field = NSTextField(string: ".punchlist/feedback")
+        let field = NSTextField(string: ".markup/feedback")
         field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
         alert.accessoryView = field
 
         return alert.runModal() == .alertFirstButtonReturn
             ? field.stringValue.trimmedFeedbackPath
-            : ".punchlist/feedback"
+            : ".markup/feedback"
     }
 
     private func showAlert(title: String, message: String) {
@@ -191,7 +191,7 @@ final class CaptureCoordinator {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Screen Recording Permission Needed"
-        alert.informativeText = "punchlist needs Screen Recording permission before it can show the screenshot editor. After enabling it, relaunch punchlist and try the hotkey again."
+        alert.informativeText = "Markup needs Screen Recording permission before it can show the screenshot editor. After enabling it, relaunch Markup and try the hotkey again."
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
 

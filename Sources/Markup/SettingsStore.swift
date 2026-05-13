@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 final class SettingsStore: ObservableObject {
-    @Published private(set) var settings: PunchlistSettings
+    @Published private(set) var settings: MarkupSettings
 
     var onHotKeyChange: (() -> Void)?
 
@@ -13,7 +13,7 @@ final class SettingsStore: ObservableObject {
     init() {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first!
-            .appendingPathComponent("punchlist", isDirectory: true)
+            .appendingPathComponent("Markup", isDirectory: true)
         settingsURL = directory.appendingPathComponent("settings.json")
 
         encoder = JSONEncoder()
@@ -22,10 +22,10 @@ final class SettingsStore: ObservableObject {
         decoder.dateDecodingStrategy = .iso8601
 
         if let data = try? Data(contentsOf: settingsURL),
-           let decoded = try? decoder.decode(PunchlistSettings.self, from: data) {
+           let decoded = try? decoder.decode(MarkupSettings.self, from: data) {
             settings = decoded
         } else {
-            settings = PunchlistSettings()
+            settings = MarkupSettings()
         }
     }
 
@@ -93,14 +93,14 @@ final class SettingsStore: ObservableObject {
 extension String {
     var trimmedFeedbackPath: String {
         let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        let value = trimmed.isEmpty ? ".punchlist/feedback" : trimmed
+        let value = trimmed.isEmpty ? ".markup/feedback" : trimmed
         let components = value
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             .split(separator: "/")
             .map(String.init)
             .filter { !$0.isEmpty && $0 != "." && $0 != ".." }
 
-        return components.isEmpty ? ".punchlist/feedback" : components.joined(separator: "/")
+        return components.isEmpty ? ".markup/feedback" : components.joined(separator: "/")
     }
 }
 
@@ -109,7 +109,7 @@ extension HotKeySettings {
         var copy = self
         copy.key = String(key.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().prefix(1))
         if copy.key.isEmpty {
-            copy.key = "P"
+            copy.key = "M"
         }
         return copy
     }

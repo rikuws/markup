@@ -85,7 +85,7 @@ final class RecordingProgressWindowController: NSWindowController {
     }
 
     func show() {
-        NSLog("punchlist: showing recording progress window")
+        NSLog("Markup: showing recording progress window")
         positionNearTopRight()
         window?.orderFrontRegardless()
     }

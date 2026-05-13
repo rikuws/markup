@@ -42,7 +42,7 @@ final class AnnotationWindowController: NSWindowController {
     }
 
     func show() {
-        NSLog("punchlist: showing annotation editor")
+        NSLog("Markup: showing annotation editor")
         NSApp.activate(ignoringOtherApps: true)
         window?.setFrame(NSScreen.allScreenFrame, display: true)
         window?.orderFrontRegardless()
@@ -76,7 +76,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
     private let onRecord: () -> Void
 
     private let canvas: AnnotationCanvasView
-    private let noteTextView = NSTextView()
+    private let noteTextView = PlaceholderTextView(placeholder: "Describe what should change, what looks wrong, or what the agent should fix.")
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let recordingBadge = NSTextField(labelWithString: "")
 
@@ -107,7 +107,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
     override func loadView() {
         view = NSView()
         view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.76).cgColor
+        view.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
     }
 
     override func viewDidLoad() {
@@ -116,6 +116,9 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         canvas.onSelectionChanged = { [weak self] in
             guard let self else { return }
             self.updateSaveState()
+        }
+        canvas.onSelectionCompleted = { [weak self] in
+            guard let self else { return }
             if self.canvas.captureRegion != nil {
                 self.view.window?.makeFirstResponder(self.noteTextView)
             }
@@ -137,27 +140,61 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         let container = NSStackView()
         container.orientation = .vertical
         container.alignment = .width
-        container.spacing = 14
+        container.spacing = 12
         container.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container)
 
-        let header = NSTextField(labelWithString: "\(captured.appName) - \(captured.windowTitle)")
-        header.font = .systemFont(ofSize: 14, weight: .semibold)
+        let header = NSTextField(labelWithString: captured.appName)
+        header.font = .systemFont(ofSize: 17, weight: .semibold)
         header.textColor = .white
         header.lineBreakMode = .byTruncatingMiddle
+
+        let windowTitle = NSTextField(labelWithString: captured.windowTitle)
+        windowTitle.font = .systemFont(ofSize: 12, weight: .medium)
+        windowTitle.textColor = NSColor.white.withAlphaComponent(0.72)
+        windowTitle.lineBreakMode = .byTruncatingMiddle
 
         let helperText = recordingURL == nil
             ? "Drag one box around the issue, then write the instruction for the coding agent."
             : "Recording attached. Drag one box, add a note, then Save to write the feedback folder."
         let helper = NSTextField(labelWithString: helperText)
-        helper.font = .systemFont(ofSize: 13)
-        helper.textColor = NSColor.white.withAlphaComponent(0.82)
+        helper.font = .systemFont(ofSize: 12)
+        helper.textColor = NSColor.white.withAlphaComponent(0.68)
+        helper.lineBreakMode = .byTruncatingTail
+
+        let titleStack = NSStackView(views: [header, windowTitle, helper])
+        titleStack.orientation = .vertical
+        titleStack.alignment = .leading
+        titleStack.spacing = 3
+
+        recordingBadge.stringValue = recordingURL == nil ? "" : "Recording attached"
+        recordingBadge.textColor = .systemGreen
+        recordingBadge.font = .systemFont(ofSize: 12, weight: .semibold)
+        recordingBadge.isHidden = recordingURL == nil
+
+        let shortcutHints = NSStackView(views: [
+            ShortcutHintView(key: "Esc", label: "Cancel"),
+            ShortcutHintView(key: "Return", label: "Save")
+        ])
+        shortcutHints.orientation = .horizontal
+        shortcutHints.spacing = 12
+        shortcutHints.alignment = .centerY
+        shortcutHints.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let headerRow = NSStackView(views: [titleStack, NSView(), shortcutHints, recordingBadge])
+        headerRow.orientation = .horizontal
+        headerRow.spacing = 14
+        headerRow.alignment = .centerY
+        headerRow.distribution = .fill
 
         canvas.translatesAutoresizingMaskIntoConstraints = false
-        canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 360).isActive = true
+        canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
 
-        let noteGlass = LiquidGlassNoteView()
-        noteGlass.translatesAutoresizingMaskIntoConstraints = false
+        let noteSurface = AnnotationSurfaceView()
+        noteSurface.translatesAutoresizingMaskIntoConstraints = false
+        noteTextView.onFocusChanged = { [weak noteSurface] isFocused in
+            noteSurface?.isActive = isFocused
+        }
 
         let noteScroll = NSScrollView()
         noteScroll.translatesAutoresizingMaskIntoConstraints = false
@@ -181,18 +218,18 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
             height: CGFloat.greatestFiniteMagnitude
         )
         noteTextView.textContainer?.widthTracksTextView = true
-        noteTextView.font = .systemFont(ofSize: 16)
+        noteTextView.font = .systemFont(ofSize: 15, weight: .regular)
         noteTextView.textColor = .white
         noteTextView.insertionPointColor = .white
         noteTextView.focusRingType = .none
         noteTextView.drawsBackground = false
         noteTextView.backgroundColor = .clear
-        noteTextView.textContainerInset = NSSize(width: 20, height: 18)
+        noteTextView.textContainerInset = NSSize(width: 18, height: 16)
         noteTextView.textContainer?.lineFragmentPadding = 0
         noteTextView.isRichText = false
         noteTextView.allowsUndo = true
         noteTextView.string = ""
-        noteGlass.installContentView(noteScroll)
+        noteSurface.installContentView(noteScroll)
 
         let noteLabel = NSTextField(labelWithString: "Note")
         noteLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -201,34 +238,33 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
 
         let recordButton = NSButton(title: "Record 10s", target: self, action: #selector(recordSelected))
         recordButton.bezelStyle = .rounded
+        recordButton.controlSize = .large
         recordButton.isEnabled = recordingURL == nil
-
-        recordingBadge.stringValue = recordingURL == nil ? "" : "Recording attached - Save to write folder"
-        recordingBadge.textColor = .systemGreen
-        recordingBadge.font = .systemFont(ofSize: 12, weight: .semibold)
 
         let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelSelected))
         cancelButton.bezelStyle = .rounded
+        cancelButton.controlSize = .large
         cancelButton.keyEquivalent = "\u{1b}"
 
         saveButton.target = self
         saveButton.action = #selector(saveSelected)
         saveButton.bezelStyle = .rounded
+        saveButton.controlSize = .large
+        saveButton.contentTintColor = .controlAccentColor
         saveButton.keyEquivalent = "\r"
 
-        let actions = NSStackView(views: [recordButton, recordingBadge, NSView(), cancelButton, saveButton])
+        let actions = NSStackView(views: [recordButton, NSView(), cancelButton, saveButton])
         actions.orientation = .horizontal
-        actions.spacing = 10
+        actions.spacing = 12
         actions.alignment = .centerY
         actions.distribution = .fill
 
         let noteSection = NSView()
         noteSection.translatesAutoresizingMaskIntoConstraints = false
         noteSection.addSubview(noteLabel)
-        noteSection.addSubview(noteGlass)
+        noteSection.addSubview(noteSurface)
 
-        container.addArrangedSubview(header)
-        container.addArrangedSubview(helper)
+        container.addArrangedSubview(headerRow)
         container.addArrangedSubview(canvas)
         container.addArrangedSubview(noteSection)
         container.addArrangedSubview(actions)
@@ -239,12 +275,12 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
             container.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
             noteLabel.topAnchor.constraint(equalTo: noteSection.topAnchor),
-            noteLabel.centerXAnchor.constraint(equalTo: noteSection.centerXAnchor),
-            noteGlass.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor),
-            noteGlass.trailingAnchor.constraint(equalTo: noteSection.trailingAnchor),
-            noteGlass.topAnchor.constraint(equalTo: noteLabel.bottomAnchor, constant: 8),
-            noteGlass.bottomAnchor.constraint(equalTo: noteSection.bottomAnchor),
-            noteGlass.heightAnchor.constraint(equalToConstant: 184)
+            noteLabel.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor, constant: 2),
+            noteSurface.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor),
+            noteSurface.trailingAnchor.constraint(equalTo: noteSection.trailingAnchor),
+            noteSurface.topAnchor.constraint(equalTo: noteLabel.bottomAnchor, constant: 8),
+            noteSurface.bottomAnchor.constraint(equalTo: noteSection.bottomAnchor),
+            noteSurface.heightAnchor.constraint(equalToConstant: 166)
         ])
     }
 
@@ -288,10 +324,19 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
     }
 }
 
-final class LiquidGlassNoteView: NSView {
+final class AnnotationSurfaceView: NSView {
     private let effectView = NSVisualEffectView()
     private let tintView = NSView()
-    private let strokeView = LiquidGlassStrokeView()
+    private let strokeView = AnnotationSurfaceStrokeView()
+
+    var isActive = false {
+        didSet {
+            guard oldValue != isActive else { return }
+            strokeView.isActive = isActive
+            layer?.shadowOpacity = isActive ? 0.30 : 0.20
+            layer?.shadowRadius = isActive ? 18 : 14
+        }
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -307,10 +352,10 @@ final class LiquidGlassNoteView: NSView {
         addSubview(contentView, positioned: .above, relativeTo: tintView)
 
         NSLayoutConstraint.activate([
-            contentView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            contentView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
-            contentView.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            contentView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2)
+            contentView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 1),
+            contentView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1),
+            contentView.topAnchor.constraint(equalTo: topAnchor, constant: 1),
+            contentView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1)
         ])
 
         addSubview(strokeView, positioned: .above, relativeTo: contentView)
@@ -326,8 +371,8 @@ final class LiquidGlassNoteView: NSView {
         super.layout()
         layer?.shadowPath = CGPath(
             roundedRect: bounds,
-            cornerWidth: 20,
-            cornerHeight: 20,
+            cornerWidth: 14,
+            cornerHeight: 14,
             transform: nil
         )
     }
@@ -336,22 +381,22 @@ final class LiquidGlassNoteView: NSView {
         wantsLayer = true
         layer?.masksToBounds = false
         layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.34
-        layer?.shadowRadius = 18
-        layer?.shadowOffset = NSSize(width: 0, height: -8)
+        layer?.shadowOpacity = 0.20
+        layer?.shadowRadius = 14
+        layer?.shadowOffset = NSSize(width: 0, height: -5)
 
         effectView.translatesAutoresizingMaskIntoConstraints = false
         effectView.material = .hudWindow
         effectView.blendingMode = .withinWindow
         effectView.state = .active
         effectView.wantsLayer = true
-        effectView.layer?.cornerRadius = 20
+        effectView.layer?.cornerRadius = 14
         effectView.layer?.masksToBounds = true
 
         tintView.translatesAutoresizingMaskIntoConstraints = false
         tintView.wantsLayer = true
-        tintView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.42).cgColor
-        tintView.layer?.cornerRadius = 20
+        tintView.layer?.backgroundColor = NSColor(calibratedWhite: 0.09, alpha: 0.82).cgColor
+        tintView.layer?.cornerRadius = 14
         tintView.layer?.masksToBounds = true
 
         strokeView.translatesAutoresizingMaskIntoConstraints = false
@@ -373,7 +418,13 @@ final class LiquidGlassNoteView: NSView {
     }
 }
 
-final class LiquidGlassStrokeView: NSView {
+final class AnnotationSurfaceStrokeView: NSView {
+    var isActive = false {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
     override var isOpaque: Bool { false }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -382,16 +433,147 @@ final class LiquidGlassStrokeView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let outerRect = bounds.insetBy(dx: 0.75, dy: 0.75)
-        let outer = NSBezierPath(roundedRect: outerRect, xRadius: 20, yRadius: 20)
-        NSColor.white.withAlphaComponent(0.28).setStroke()
-        outer.lineWidth = 1.5
+        let outer = NSBezierPath(roundedRect: outerRect, xRadius: 14, yRadius: 14)
+        let outerColor = isActive
+            ? NSColor.controlAccentColor.withAlphaComponent(0.88)
+            : NSColor.white.withAlphaComponent(0.24)
+        outerColor.setStroke()
+        outer.lineWidth = isActive ? 1.5 : 1
         outer.stroke()
 
-        let innerRect = bounds.insetBy(dx: 2.25, dy: 2.25)
-        let inner = NSBezierPath(roundedRect: innerRect, xRadius: 18, yRadius: 18)
-        NSColor.black.withAlphaComponent(0.28).setStroke()
+        let innerRect = bounds.insetBy(dx: 1.75, dy: 1.75)
+        let inner = NSBezierPath(roundedRect: innerRect, xRadius: 12, yRadius: 12)
+        NSColor.black.withAlphaComponent(isActive ? 0.10 : 0.24).setStroke()
         inner.lineWidth = 1
         inner.stroke()
+    }
+}
+
+final class PlaceholderTextView: NSTextView {
+    var onFocusChanged: ((Bool) -> Void)?
+    private var placeholder = ""
+
+    init(placeholder: String) {
+        super.init(frame: .zero)
+        self.placeholder = placeholder
+    }
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+
+        guard string.isEmpty else { return }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.lineSpacing = 2
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font ?? NSFont.systemFont(ofSize: 15),
+            .foregroundColor: NSColor.white.withAlphaComponent(0.45),
+            .paragraphStyle: paragraph
+        ]
+        let rect = NSRect(
+            x: textContainerInset.width,
+            y: textContainerInset.height,
+            width: max(0, bounds.width - textContainerInset.width * 2),
+            height: max(0, bounds.height - textContainerInset.height * 2)
+        )
+        (placeholder as NSString).draw(in: rect, withAttributes: attributes)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        needsDisplay = true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecome = super.becomeFirstResponder()
+        if didBecome {
+            onFocusChanged?(true)
+            needsDisplay = true
+        }
+        return didBecome
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let didResign = super.resignFirstResponder()
+        if didResign {
+            onFocusChanged?(false)
+            needsDisplay = true
+        }
+        return didResign
+    }
+}
+
+final class ShortcutHintView: NSStackView {
+    init(key: String, label: String) {
+        let keycap = KeycapView(text: key)
+        let action = NSTextField(labelWithString: label)
+        action.font = .systemFont(ofSize: 11, weight: .medium)
+        action.textColor = NSColor.white.withAlphaComponent(0.62)
+
+        super.init(frame: .zero)
+        orientation = .horizontal
+        alignment = .centerY
+        spacing = 5
+        translatesAutoresizingMaskIntoConstraints = false
+        addArrangedSubview(keycap)
+        addArrangedSubview(action)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
+final class KeycapView: NSView {
+    private let label = NSTextField(labelWithString: "")
+
+    init(text: String) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        layer?.borderColor = NSColor.white.withAlphaComponent(0.20).cgColor
+        layer?.borderWidth = 0.5
+
+        label.stringValue = text
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = NSColor.white.withAlphaComponent(0.78)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let labelSize = label.intrinsicContentSize
+        return NSSize(width: max(26, labelSize.width + 12), height: 20)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
     }
 }
 

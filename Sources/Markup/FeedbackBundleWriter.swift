@@ -131,14 +131,14 @@ extension NSImage {
               let bitmap = NSBitmapImageRep(data: tiff),
               let data = bitmap.representation(using: .png, properties: [:])
         else {
-            throw PunchlistError("Could not encode PNG image.")
+            throw MarkupError("Could not encode PNG image.")
         }
 
         try data.write(to: url, options: .atomic)
     }
 }
 
-struct PunchlistError: LocalizedError {
+struct MarkupError: LocalizedError {
     var errorDescription: String?
 
     init(_ message: String) {

@@ -2,17 +2,20 @@
 import PackageDescription
 
 let package = Package(
-    name: "punchlist",
+    name: "Markup",
     platforms: [
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "punchlist", targets: ["punchlist"])
+        .executable(name: "Markup", targets: ["Markup"])
     ],
     targets: [
         .executableTarget(
-            name: "punchlist",
-            path: "Sources/punchlist"
+            name: "Markup",
+            path: "Sources/Markup",
+            resources: [
+                .process("Resources")
+            ]
         )
     ]
 )

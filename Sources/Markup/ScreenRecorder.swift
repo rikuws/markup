@@ -19,12 +19,12 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         completion: @escaping (Result<URL, Error>) -> Void
     ) {
         guard session == nil, screenCaptureKitSession == nil else {
-            completion(.failure(PunchlistError("A recording is already in progress.")))
+            completion(.failure(MarkupError("A recording is already in progress.")))
             return
         }
 
         guard duration > 0 else {
-            completion(.failure(PunchlistError("Recording duration must be greater than zero.")))
+            completion(.failure(MarkupError("Recording duration must be greater than zero.")))
             return
         }
 
@@ -51,13 +51,13 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         completion: @escaping (Result<URL, Error>) -> Void
     ) {
         let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("punchlist-\(UUID().uuidString).mov")
+            .appendingPathComponent("markup-\(UUID().uuidString).mov")
 
         let session = AVCaptureSession()
         session.sessionPreset = .high
 
         guard let input = AVCaptureScreenInput(displayID: CGMainDisplayID()) else {
-            completion(.failure(PunchlistError("Could not create screen recording input.")))
+            completion(.failure(MarkupError("Could not create screen recording input.")))
             return
         }
         input.capturesCursor = true
@@ -66,7 +66,7 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         let output = AVCaptureMovieFileOutput()
 
         guard session.canAddInput(input), session.canAddOutput(output) else {
-            completion(.failure(PunchlistError("Could not configure screen recording.")))
+            completion(.failure(MarkupError("Could not configure screen recording.")))
             return
         }
 
@@ -80,11 +80,11 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         destinationURL = destination
         didComplete = false
 
-        NSLog("punchlist: starting screen recording to \(destination.path)")
+        NSLog("Markup: starting screen recording to \(destination.path)")
 
         session.startRunning()
         guard session.isRunning else {
-            finish(.failure(PunchlistError("Screen recording session did not start.")))
+            finish(.failure(MarkupError("Screen recording session did not start.")))
             return
         }
 
@@ -100,7 +100,7 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
                 return
             }
 
-            self.finish(.failure(PunchlistError("Screen recording did not start. Check Screen Recording permission for punchlist, relaunch the app, and try again.")))
+            self.finish(.failure(MarkupError("Screen recording did not start. Check Screen Recording permission for Markup, relaunch the app, and try again.")))
         }
         startTimeoutWorkItem = startTimeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: startTimeout)
@@ -117,7 +117,7 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         didStartRecordingTo fileURL: URL,
         from connections: [AVCaptureConnection]
     ) {
-        NSLog("punchlist: screen recording started")
+        NSLog("Markup: screen recording started")
         startTimeoutWorkItem?.cancel()
         onStarted?()
     }
@@ -129,20 +129,20 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         error: Error?
     ) {
         if let error {
-            NSLog("punchlist: screen recording failed: \(error.localizedDescription)")
+            NSLog("Markup: screen recording failed: \(error.localizedDescription)")
             finish(.failure(error))
         } else {
             do {
                 let attributes = try FileManager.default.attributesOfItem(atPath: outputFileURL.path)
                 let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
                 guard size > 0 else {
-                    throw PunchlistError("Screen recording finished but produced an empty movie.")
+                    throw MarkupError("Screen recording finished but produced an empty movie.")
                 }
 
-                NSLog("punchlist: screen recording finished, \(size) bytes")
+                NSLog("Markup: screen recording finished, \(size) bytes")
                 finish(.success(outputFileURL))
             } catch {
-                NSLog("punchlist: screen recording output could not be verified: \(error.localizedDescription)")
+                NSLog("Markup: screen recording output could not be verified: \(error.localizedDescription)")
                 finish(.failure(error))
             }
         }
@@ -175,7 +175,7 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
     private let destination: URL
     private let onStarted: (() -> Void)?
     private let completion: (Result<URL, Error>) -> Void
-    private let workQueue = DispatchQueue(label: "dev.rikuwikman.punchlist.screen-capture-kit")
+    private let workQueue = DispatchQueue(label: "dev.rikuwikman.markup.screen-capture-kit")
 
     private var stream: SCStream?
     private var recordingOutput: SCRecordingOutput?
@@ -194,7 +194,7 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
         self.onStarted = onStarted
         self.completion = completion
         destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent("punchlist-\(UUID().uuidString).mov")
+            .appendingPathComponent("markup-\(UUID().uuidString).mov")
         super.init()
     }
 
@@ -209,11 +209,11 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
     }
 
     private func startScreenCaptureKitRecording() async throws {
-        NSLog("punchlist: preparing ScreenCaptureKit recording to \(destination.path)")
+        NSLog("Markup: preparing ScreenCaptureKit recording to \(destination.path)")
 
         let content = try await SCShareableContent.current
         guard let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }) ?? content.displays.first else {
-            throw PunchlistError("No display is available for screen recording.")
+            throw MarkupError("No display is available for screen recording.")
         }
 
         let excludedApplications = content.applications.filter {
@@ -255,7 +255,7 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
 
         let startTimeout = DispatchWorkItem { [weak self] in
             guard let self, !self.didStart else { return }
-            self.finish(.failure(PunchlistError("Screen recording did not start. Check Screen Recording permission for punchlist, relaunch the app, and try again.")))
+            self.finish(.failure(MarkupError("Screen recording did not start. Check Screen Recording permission for Markup, relaunch the app, and try again.")))
         }
         startTimeoutWorkItem = startTimeout
 
@@ -269,12 +269,12 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
             }
         }
 
-        NSLog("punchlist: ScreenCaptureKit stream started")
+        NSLog("Markup: ScreenCaptureKit stream started")
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: startTimeout)
     }
 
     func recordingOutputDidStartRecording(_ recordingOutput: SCRecordingOutput) {
-        NSLog("punchlist: ScreenCaptureKit recording started")
+        NSLog("Markup: ScreenCaptureKit recording started")
         didStart = true
         startTimeoutWorkItem?.cancel()
         DispatchQueue.main.async {
@@ -289,27 +289,27 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
     }
 
     func recordingOutput(_ recordingOutput: SCRecordingOutput, didFailWithError error: Error) {
-        NSLog("punchlist: ScreenCaptureKit recording failed: \(error.localizedDescription)")
+        NSLog("Markup: ScreenCaptureKit recording failed: \(error.localizedDescription)")
         finish(.failure(error))
     }
 
     func recordingOutputDidFinishRecording(_ recordingOutput: SCRecordingOutput) {
-        NSLog("punchlist: ScreenCaptureKit recording finished")
+        NSLog("Markup: ScreenCaptureKit recording finished")
         verifyAndFinish()
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        NSLog("punchlist: ScreenCaptureKit stream stopped with error: \(error.localizedDescription)")
+        NSLog("Markup: ScreenCaptureKit stream stopped with error: \(error.localizedDescription)")
         finish(.failure(error))
     }
 
     private func stopRecording() {
         guard let stream, let recordingOutput else {
-            finish(.failure(PunchlistError("Screen recording stream was not active.")))
+            finish(.failure(MarkupError("Screen recording stream was not active.")))
             return
         }
 
-        NSLog("punchlist: stopping ScreenCaptureKit recording")
+        NSLog("Markup: stopping ScreenCaptureKit recording")
         do {
             try stream.removeRecordingOutput(recordingOutput)
         } catch {
@@ -330,10 +330,10 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
             let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
             let size = (attributes[.size] as? NSNumber)?.int64Value ?? 0
             guard size > 0 else {
-                throw PunchlistError("Screen recording finished but produced an empty movie.")
+                throw MarkupError("Screen recording finished but produced an empty movie.")
             }
 
-            NSLog("punchlist: ScreenCaptureKit recording output verified, \(size) bytes")
+            NSLog("Markup: ScreenCaptureKit recording output verified, \(size) bytes")
             finish(.success(destination))
         } catch {
             finish(.failure(error))
@@ -358,7 +358,7 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
         if stream != nil {
             stream?.stopCapture { error in
                 if let error {
-                    NSLog("punchlist: ScreenCaptureKit stream stop reported: \(error.localizedDescription)")
+                    NSLog("Markup: ScreenCaptureKit stream stop reported: \(error.localizedDescription)")
                 }
             }
         }

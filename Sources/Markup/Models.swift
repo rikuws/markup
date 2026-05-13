@@ -2,11 +2,30 @@ import AppKit
 import Foundation
 
 struct HotKeySettings: Codable, Equatable {
-    var key: String = "P"
+    var key: String = "M"
     var command: Bool = true
     var shift: Bool = true
     var option: Bool = false
     var control: Bool = false
+
+    var displayString: String {
+        var parts: [String] = []
+        if command { parts.append("\u{2318}") }
+        if shift { parts.append("\u{21E7}") }
+        if option { parts.append("\u{2325}") }
+        if control { parts.append("\u{2303}") }
+        parts.append(key.uppercased())
+        return parts.joined()
+    }
+
+    var menuModifierFlags: NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if command { flags.insert(.command) }
+        if shift { flags.insert(.shift) }
+        if option { flags.insert(.option) }
+        if control { flags.insert(.control) }
+        return flags
+    }
 }
 
 struct AppRoute: Codable, Identifiable, Equatable {
@@ -28,7 +47,7 @@ struct AppRoute: Codable, Identifiable, Equatable {
     }
 }
 
-struct PunchlistSettings: Codable, Equatable {
+struct MarkupSettings: Codable, Equatable {
     var hotKey = HotKeySettings()
     var routes: [AppRoute] = []
 }

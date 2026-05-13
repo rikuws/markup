@@ -2,8 +2,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/.build/punchlist.app"
-EXECUTABLE="$ROOT/.build/release/punchlist"
+APP="$ROOT/.build/Markup.app"
+EXECUTABLE="$ROOT/.build/release/Markup"
+RESOURCE_DIR="$ROOT/Sources/Markup/Resources"
+
+source "$ROOT/scripts/signing.sh"
+
+SIGN_IDENTITY="$(markup_resolve_sign_identity)"
 
 cd "$ROOT"
 swift build -c release
@@ -12,7 +17,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mkdir -p "$APP/Contents/Resources"
 
-cp "$EXECUTABLE" "$APP/Contents/MacOS/punchlist"
+cp "$EXECUTABLE" "$APP/Contents/MacOS/Markup"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -22,13 +27,15 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>punchlist</string>
+  <string>Markup</string>
   <key>CFBundleIdentifier</key>
-  <string>dev.rikuwikman.punchlist</string>
+  <string>dev.rikuwikman.markup</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>punchlist</string>
+  <string>Markup</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -42,13 +49,25 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © 2026</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>punchlist can use microphone access when macOS dictation is used in the note field.</string>
+  <string>Markup can use microphone access when macOS dictation is used in the note field.</string>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>punchlist captures screenshots and optional short recordings for local visual feedback tasks.</string>
+  <string>Markup captures screenshots and optional short recordings for local visual feedback tasks.</string>
 </dict>
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP"
+if [[ -d "$RESOURCE_DIR" ]]; then
+  cp -R "$RESOURCE_DIR"/. "$APP/Contents/Resources/"
+fi
+
+markup_print_signing_choice "$SIGN_IDENTITY"
+
+SIGN_ARGS=(--force --deep --sign "$SIGN_IDENTITY")
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+  SIGN_ARGS+=(--options runtime --timestamp)
+fi
+
+codesign "${SIGN_ARGS[@]}" "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP" >/dev/null
 
 echo "$APP"

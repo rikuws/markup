@@ -104,7 +104,7 @@ final class HotKeyManager {
 
     private func presentHotKeyError(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "punchlist Hotkey"
+        alert.messageText = "Markup Hotkey"
         alert.informativeText = message
         alert.addButton(withTitle: "OK")
         alert.runModal()

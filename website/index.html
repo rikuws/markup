@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Markup - visual bug reports for local dev loops</title>
+    <meta
+      name="description"
+      content="Markup is an open-source macOS menu bar tool for turning UI feedback into agent-readable task bundles."
+    >
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Literata:opsz,wght@7..72,500;7..72,700&display=swap"
+      rel="stylesheet"
+    >
+    <link rel="icon" href="./assets/menu-bar-icon.png">
+    <link rel="apple-touch-icon" href="./assets/markup-icon.png">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Markup home">
+        <img src="./assets/menu-bar-icon.png" alt="" width="44" height="44">
+        <span>Markup</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary navigation">
+        <a href="#workflow">Workflow</a>
+        <a href="#bundle">Bundle</a>
+        <a href="#build">Build</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-grid" aria-hidden="true">
+          <div class="capture-window">
+            <div class="window-bar">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
+              <span class="window-title">CheckoutView.swift</span>
+            </div>
+            <div class="mock-app">
+              <div class="sidebar-rail">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <div class="mock-content">
+                <div class="mock-toolbar">
+                  <strong>Local Review</strong>
+                  <span>PR #214</span>
+                </div>
+                <div class="mock-row wide"></div>
+                <div class="mock-row medium"></div>
+                <div class="mock-row short"></div>
+                <div class="diff-zone">
+                  <div class="line add"></div>
+                  <div class="line remove"></div>
+                  <div class="line add narrow"></div>
+                  <div class="line neutral"></div>
+                </div>
+                <div class="selection-box">
+                  <span>642 x 238</span>
+                </div>
+                <div class="note-panel">
+                  <p>Hover panel covers the changed line; keep it anchored below the gutter.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bundle-panel">
+            <div class="bundle-head">writes on save</div>
+            <ol>
+              <li><span>instruction.md</span></li>
+              <li><span>metadata.json</span></li>
+              <li><span>screenshot.png</span></li>
+              <li><span>recording.mov</span></li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="hero-copy" data-reveal>
+          <p class="eyebrow">Open-source macOS dev tool</p>
+          <h1 id="hero-title">Markup</h1>
+          <p class="lede">
+            Turn visual QA into a precise local task bundle: hotkey, box the issue, add the note,
+            save it straight into the project your agent is already editing.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#build">Build locally</a>
+            <a class="button secondary" href="#bundle">Inspect the output</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="signal-strip" aria-label="Core workflow">
+        <div data-reveal>
+          <span class="signal-label">Trigger</span>
+          <strong>Cmd Shift M</strong>
+        </div>
+        <div data-reveal>
+          <span class="signal-label">Capture</span>
+          <strong>One box, one note</strong>
+        </div>
+        <div data-reveal>
+          <span class="signal-label">Output</span>
+          <strong>Agent-readable folder</strong>
+        </div>
+      </section>
+
+      <section id="workflow" class="section workflow-section">
+        <div class="section-kicker" data-reveal>Fast loop</div>
+        <div class="section-heading" data-reveal>
+          <h2>Designed for the moment a bug is visible.</h2>
+          <p>
+            Markup stays out of the way until the UI breaks in front of you. The route can be
+            configured per app, and capture output lands inside the repo as plain files.
+          </p>
+        </div>
+        <div class="workflow-track">
+          <article class="workflow-step" data-reveal>
+            <span class="step-number">01</span>
+            <h3>Press the hotkey</h3>
+            <p>Capture the active macOS window without switching tools or opening a ticket form.</p>
+          </article>
+          <article class="workflow-step" data-reveal>
+            <span class="step-number">02</span>
+            <h3>Mark the exact region</h3>
+            <p>Draw one clear rectangle on the screenshot so the issue is spatial, not vague.</p>
+          </article>
+          <article class="workflow-step" data-reveal>
+            <span class="step-number">03</span>
+            <h3>Add the missing context</h3>
+            <p>Type or dictate a short note, with optional 10-second recording for motion bugs.</p>
+          </article>
+          <article class="workflow-step" data-reveal>
+            <span class="step-number">04</span>
+            <h3>Save into the project</h3>
+            <p>The bundle appears where your local agent or maintainer workflow can pick it up.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="bundle" class="section bundle-section">
+        <div class="bundle-copy" data-reveal>
+          <div class="section-kicker">Plain files</div>
+          <h2>No SaaS inbox. No lossy screenshot pile.</h2>
+          <p>
+            Every capture becomes a timestamped folder with markdown instructions, machine-readable
+            metadata, the marked screenshot, the original screenshot, and an optional recording.
+          </p>
+          <div class="bundle-tags" aria-label="Bundle traits">
+            <span>local-first</span>
+            <span>diff-friendly</span>
+            <span>agent-readable</span>
+          </div>
+        </div>
+        <div class="bundle-terminal" data-reveal>
+          <div class="terminal-top">
+            <span>.markup/feedback</span>
+            <button type="button" data-copy="tree" aria-label="Copy bundle tree">Copy</button>
+          </div>
+          <pre id="tree"><code>&lt;project&gt;/.markup/feedback/
+  20260512-091733-figma-a7c42e/
+    instruction.md
+    metadata.json
+    screenshot.png
+    screenshot-original.png
+    recording.mov</code></pre>
+        </div>
+      </section>
+
+      <section class="section anatomy-section" aria-labelledby="anatomy-title">
+        <div class="section-heading narrow" data-reveal>
+          <div class="section-kicker">Why it fits dev teams</div>
+          <h2 id="anatomy-title">It treats feedback as source material.</h2>
+        </div>
+        <div class="anatomy-grid">
+          <article data-reveal>
+            <h3>Evidence stays attached</h3>
+            <p>The marked screenshot, original screenshot, coordinates, app identity, and note travel together.</p>
+          </article>
+          <article data-reveal>
+            <h3>Routes are explicit</h3>
+            <p>Each app can point to a project folder and a feedback folder name that you can edit later.</p>
+          </article>
+          <article data-reveal>
+            <h3>Review work starts local</h3>
+            <p>The output is ready for a maintainer, a coding agent, or a repo-specific triage script.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="build" class="section build-section">
+        <div class="build-copy" data-reveal>
+          <img src="./assets/markup-icon.png" alt="Markup app icon" width="96" height="96">
+          <div>
+            <div class="section-kicker">Source-first install</div>
+            <h2>Build the menu bar app from the repo.</h2>
+            <p>
+              Markup is a SwiftPM macOS app. Run it directly while hacking, or build the app
+              bundle for a native menu bar workflow.
+            </p>
+          </div>
+        </div>
+        <div class="command-board" data-reveal>
+          <div class="command-row">
+            <code>swift run Markup</code>
+            <button type="button" data-copy="swift run Markup">Copy</button>
+          </div>
+          <div class="command-row">
+            <code>./scripts/build-app.sh &amp;&amp; open .build/Markup.app</code>
+            <button type="button" data-copy="./scripts/build-app.sh && open .build/Markup.app">Copy</button>
+          </div>
+          <div class="command-row">
+            <code>./scripts/package-app.sh</code>
+            <button type="button" data-copy="./scripts/package-app.sh">Copy</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>Markup</span>
+      <a href="#top">Back to top</a>
+    </footer>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

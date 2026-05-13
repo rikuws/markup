@@ -15,16 +15,16 @@ final class ActiveWindowCapturer {
         let title = firstNonEmpty(focusedWindow?.title, cgWindow?.title, appName)
 
         guard let cgWindow else {
-            NSLog("punchlist: no capturable window found for \(appName) pid=\(pid)")
+            NSLog("Markup: no capturable window found for \(appName) pid=\(pid)")
             return nil
         }
 
-        NSLog("punchlist: capturing window \(cgWindow.id) title='\(cgWindow.title ?? "")' bounds=\(NSStringFromRect(cgWindow.bounds)) for \(appName)")
+        NSLog("Markup: capturing window \(cgWindow.id) title='\(cgWindow.title ?? "")' bounds=\(NSStringFromRect(cgWindow.bounds)) for \(appName)")
 
         guard let image = captureWindowImage(windowID: cgWindow.id)
             ?? captureVisibleWindowRegion(bounds: cgWindow.bounds)
         else {
-            NSLog("punchlist: failed to capture window \(cgWindow.id) for \(appName)")
+            NSLog("Markup: failed to capture window \(cgWindow.id) for \(appName)")
             return nil
         }
 

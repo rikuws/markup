@@ -1,4 +1,6 @@
 .build/
+dist/
+.swiftpm/
 DerivedData/
 *.xcuserstate
 .DS_Store
