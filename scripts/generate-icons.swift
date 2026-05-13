@@ -5,12 +5,10 @@ import Foundation
 
 let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 let resourceDirectory = root.appendingPathComponent("Sources/Markup/Resources", isDirectory: true)
-let websiteAssetDirectory = root.appendingPathComponent("website/assets", isDirectory: true)
 let workDirectory = root.appendingPathComponent(".build/icon-work", isDirectory: true)
 let iconsetDirectory = workDirectory.appendingPathComponent("AppIcon.iconset", isDirectory: true)
 
 try FileManager.default.createDirectory(at: resourceDirectory, withIntermediateDirectories: true)
-try FileManager.default.createDirectory(at: websiteAssetDirectory, withIntermediateDirectories: true)
 try FileManager.default.createDirectory(at: iconsetDirectory, withIntermediateDirectories: true)
 
 func makeBitmap(size: Int, draw: (NSRect) -> Void) -> NSBitmapImageRep {
@@ -165,9 +163,7 @@ for (name, size) in appIconSizes {
     )
 }
 
-try writePNG(makeBitmap(size: 512, draw: drawAppIcon), to: websiteAssetDirectory.appendingPathComponent("markup-icon.png"))
 try writePNG(makeBitmap(size: 88, draw: drawMenuIcon), to: resourceDirectory.appendingPathComponent("MenuBarIcon.png"))
-try writePNG(makeBitmap(size: 88, draw: drawMenuIcon), to: websiteAssetDirectory.appendingPathComponent("menu-bar-icon.png"))
 
 let iconutil = Process()
 iconutil.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")

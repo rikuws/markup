@@ -1,47 +1,23 @@
 # Markup
 
-Markup is a local-first macOS menu bar utility for capturing visual feedback while testing apps. Press the global hotkey, box the UI issue, add a short note, and Markup writes an agent-readable task bundle into the configured project.
+Markup is a local-first macOS menu bar app for turning visual feedback into structured work. Press the hotkey, mark the issue on screen, add a short note, and Markup writes the whole thing into the project folder where an agent or teammate can act on it.
 
-## Build and Run
+It is built for the moment when a bug is obvious on screen but expensive to explain. Instead of switching to an issue tracker, describing layout details from memory, or dropping loose screenshots in chat, Markup captures the UI state, the marked region, the note, app context, and optional short recording as one feedback bundle.
 
-```sh
-swift run Markup
-```
+## What It Does
 
-For a real app bundle:
+- Captures the active app window from the menu bar or `Cmd+Shift+M`.
+- Lets you draw one clear box around the problem.
+- Gives you a focused note field for a short typed or dictated instruction.
+- Can attach a manual 10-second screen recording when motion matters.
+- Routes feedback per app into the project and folder you choose.
+- Saves structured bundles only when you commit the capture.
 
-```sh
-./scripts/build-app.sh
-open .build/Markup.app
-```
+## Why It Exists
 
-`build-app.sh` uses a real Apple signing identity automatically when one is installed. It prefers `Developer ID Application`, then `Apple Development`, and only falls back to ad hoc signing when no Apple identity exists. To force a local developer-signed build:
+Visual feedback usually loses context. A screenshot needs a note, the note needs a file path, the file path needs reproduction steps, and by the time the work reaches an implementation agent the original intent has already been compressed.
 
-```sh
-MARKUP_SIGNING_MODE=development ./scripts/build-app.sh
-```
-
-For a downloadable build you can upload to a website:
-
-```sh
-./scripts/package-app.sh
-```
-
-That writes a drag-to-Applications disk image and a zipped app bundle under `dist/`.
-
-Website downloads that should open without Gatekeeper warnings need Developer ID signing and notarization. `package-app.sh` requires a `Developer ID Application` certificate by default so release artifacts do not accidentally ship with development or ad hoc signing. After installing that certificate and storing notary credentials, build and notarize like this:
-
-```sh
-xcrun notarytool store-credentials markup-notary \
-  --apple-id "you@example.com" \
-  --team-id "TEAMID" \
-  --password "app-specific-password"
-
-./scripts/package-app.sh
-NOTARYTOOL_PROFILE=markup-notary ./scripts/notarize-app.sh
-```
-
-The first capture may require macOS Screen Recording permission. Window titles use Accessibility permission when available, with Core Graphics metadata as a fallback.
+Markup keeps that context together. Each capture becomes a small task packet with the original screenshot, the annotated screenshot, metadata, and an instruction file. The output is plain files on disk, so it fits local development workflows without adding a service account, inbox, or hosted backend.
 
 ## Workflow
 
@@ -53,9 +29,11 @@ The first capture may require macOS Screen Recording permission. Window titles u
 6. Type or dictate a short note.
 7. Save. The feedback folder is written only at this point.
 
-Bundles are written to:
+## Output
 
-```text
+Each saved capture is written as a folder in the configured project:
+
+```txt
 <project>/<feedback-path>/<timestamp>-<app>-<id>/
   instruction.md
   metadata.json
@@ -64,4 +42,12 @@ Bundles are written to:
   recording.mov
 ```
 
-`recording.mov` is present only when you use `Record 10s`.
+`recording.mov` is included only when you use `Record 10s`.
+
+The bundle is meant to be readable by both people and coding agents: `instruction.md` carries the task, `metadata.json` carries the capture context, and the images preserve exactly what was on screen.
+
+## Privacy
+
+Markup is local-first. Captures are written to the project route you configure, and nothing is uploaded by the app.
+
+The first capture may require macOS Screen Recording permission. Window titles use Accessibility permission when available, with Core Graphics metadata as a fallback.
