@@ -12,6 +12,12 @@ export MARKUP_SIGNING_MODE="${MARKUP_SIGNING_MODE:-developer-id}"
 SIGN_IDENTITY="$(markup_resolve_sign_identity)"
 export MARKUP_CODESIGN_IDENTITY="$SIGN_IDENTITY"
 
+if [[ "${MARKUP_ALLOW_DEVELOPMENT_PACKAGE:-0}" != "1" && -z "${MARKUP_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+  echo "MARKUP_SPARKLE_PUBLIC_ED_KEY must be set for distributable packages." >&2
+  echo "Generate it with Sparkle's generate_keys tool and store it with the matching private key used for appcasts." >&2
+  exit 1
+fi
+
 "$ROOT/scripts/build-app.sh" >/dev/null
 
 if [[ "${MARKUP_ALLOW_DEVELOPMENT_PACKAGE:-0}" != "1" ]]; then

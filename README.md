@@ -10,6 +10,23 @@ Markup is a local-first macOS menu bar app for turning visual UI feedback into a
 
 Markup requires macOS 13 or newer. Give it Screen Recording permission when macOS asks so it can capture screenshots and short recordings.
 
+## Updates
+
+Markup uses Sparkle for native macOS updates. The first Sparkle-capable release still has to be installed from the DMG; later releases can be installed from the app's Check for Updates action.
+
+Tagged GitHub releases require these secrets:
+
+- `MARKUP_SPARKLE_PUBLIC_ED_KEY`
+- `MARKUP_SPARKLE_PRIVATE_ED_KEY`
+
+Generate the key pair with Sparkle's `generate_keys` tool from the resolved SwiftPM artifact, then keep the private key only in release secrets.
+
+```sh
+swift package resolve
+.build/artifacts/sparkle/Sparkle/bin/generate_keys
+.build/artifacts/sparkle/Sparkle/bin/generate_keys -x sparkle_private_key
+```
+
 ## Features
 
 - Capture the active window from the menu bar or with `Cmd+Shift+M`.

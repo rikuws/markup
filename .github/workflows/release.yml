@@ -22,6 +22,8 @@ jobs:
       MARKUP_APPLE_ID: ${{ secrets.MARKUP_APPLE_ID }}
       MARKUP_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MARKUP_APPLE_APP_SPECIFIC_PASSWORD }}
       MARKUP_APPLE_TEAM_ID: ${{ secrets.MARKUP_APPLE_TEAM_ID }}
+      MARKUP_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.MARKUP_SPARKLE_PUBLIC_ED_KEY }}
+      MARKUP_SPARKLE_PRIVATE_ED_KEY: ${{ secrets.MARKUP_SPARKLE_PRIVATE_ED_KEY }}
       NOTARYTOOL_PROFILE: markup-notary
 
     steps:
@@ -45,7 +47,9 @@ jobs:
             MARKUP_DEVELOPER_ID_CERTIFICATE_PASSWORD \
             MARKUP_APPLE_ID \
             MARKUP_APPLE_APP_SPECIFIC_PASSWORD \
-            MARKUP_APPLE_TEAM_ID; do
+            MARKUP_APPLE_TEAM_ID \
+            MARKUP_SPARKLE_PUBLIC_ED_KEY \
+            MARKUP_SPARKLE_PRIVATE_ED_KEY; do
             if [[ -z "${!name:-}" ]]; then
               missing+=("$name")
             fi
@@ -111,6 +115,14 @@ jobs:
           dmg="$(find dist -maxdepth 1 -name 'markup-*.dmg' -print | sort | tail -n 1)"
           ./scripts/notarize-app.sh "$dmg"
 
+      - name: Notarize Sparkle ZIP
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+
+          zip="$(find dist -maxdepth 1 -name 'markup-*.zip' -print | sort | tail -n 1)"
+          ./scripts/notarize-sparkle-zip.sh "$zip"
+
       - name: Prepare release assets
         run: |
           set -euo pipefail
@@ -127,6 +139,15 @@ jobs:
 
           cp "$latest_dmg" release-assets/markup-latest-macos.dmg
           cp "$latest_zip" release-assets/markup-latest-macos.zip
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            export MARKUP_RELEASE_BASE_URL="https://github.com/rikuws/markup/releases/download/$GITHUB_REF_NAME"
+            export MARKUP_RELEASE_LINK="https://github.com/rikuws/markup/releases/tag/$GITHUB_REF_NAME"
+
+            appcast="$(./scripts/generate-appcast.sh "$latest_zip")"
+            cp "$appcast" release-assets/appcast.xml
+            find .build/sparkle-updates -maxdepth 1 -name '*.delta' -exec cp {} release-assets/ \;
+          fi
 
           shasum -a 256 release-assets/* > release-assets/SHA256SUMS.txt
 

@@ -4,27 +4,33 @@ import Combine
 final class StatusBarController: NSObject {
     private let item: NSStatusItem
     private let captureItem: NSMenuItem
+    private let checkForUpdatesItem: NSMenuItem
     private let settingsStore: SettingsStore
+    private let appUpdater: AppUpdater
     private let capture: () -> Void
     private let openSettings: () -> Void
     private let openFeedbackFolder: () -> Void
     private let quit: () -> Void
     private var settingsCancellable: AnyCancellable?
+    private var updaterCancellable: AnyCancellable?
 
     init(
         settingsStore: SettingsStore,
+        appUpdater: AppUpdater,
         capture: @escaping () -> Void,
         openSettings: @escaping () -> Void,
         openFeedbackFolder: @escaping () -> Void,
         quit: @escaping () -> Void
     ) {
         self.settingsStore = settingsStore
+        self.appUpdater = appUpdater
         self.capture = capture
         self.openSettings = openSettings
         self.openFeedbackFolder = openFeedbackFolder
         self.quit = quit
 
         captureItem = NSMenuItem(title: "Capture Feedback", action: #selector(captureSelected), keyEquivalent: "")
+        checkForUpdatesItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdatesSelected), keyEquivalent: "")
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
         super.init()
@@ -39,6 +45,11 @@ final class StatusBarController: NSObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] settings in
                 self?.applyHotKey(settings.hotKey)
+            }
+        updaterCancellable = appUpdater.$canCheckForUpdates
+            .receive(on: RunLoop.main)
+            .sink { [weak self] canCheck in
+                self?.checkForUpdatesItem.isEnabled = canCheck
             }
     }
 
@@ -78,6 +89,11 @@ final class StatusBarController: NSObject {
         settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         menu.addItem(settingsItem)
 
+        checkForUpdatesItem.target = self
+        checkForUpdatesItem.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: nil)
+        checkForUpdatesItem.isEnabled = appUpdater.canCheckForUpdates
+        menu.addItem(checkForUpdatesItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit Markup", action: #selector(quitSelected), keyEquivalent: "q")
@@ -104,6 +120,10 @@ final class StatusBarController: NSObject {
 
     @objc private func openFeedbackFolderSelected() {
         openFeedbackFolder()
+    }
+
+    @objc private func checkForUpdatesSelected(_ sender: NSMenuItem) {
+        appUpdater.checkForUpdates(sender)
     }
 
     @objc private func quitSelected() {

@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 final class SettingsWindowController: NSWindowController {
-    init(settingsStore: SettingsStore) {
-        let view = SettingsView(settingsStore: settingsStore)
+    init(settingsStore: SettingsStore, appUpdater: AppUpdater) {
+        let view = SettingsView(settingsStore: settingsStore, appUpdater: appUpdater)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
         window.title = "Markup"
@@ -12,7 +12,7 @@ final class SettingsWindowController: NSWindowController {
         window.titlebarAppearsTransparent = true
         window.toolbarStyle = .unified
         window.isMovableByWindowBackground = true
-        window.setContentSize(NSSize(width: 780, height: 590))
+        window.setContentSize(NSSize(width: 780, height: 650))
         window.contentMinSize = NSSize(width: 680, height: 500)
         window.center()
         super.init(window: window)
@@ -25,10 +25,12 @@ final class SettingsWindowController: NSWindowController {
 
 struct SettingsView: View {
     @ObservedObject var settingsStore: SettingsStore
+    @ObservedObject var appUpdater: AppUpdater
     @State private var hotKey: HotKeySettings
 
-    init(settingsStore: SettingsStore) {
+    init(settingsStore: SettingsStore, appUpdater: AppUpdater) {
         self.settingsStore = settingsStore
+        self.appUpdater = appUpdater
         _hotKey = State(initialValue: settingsStore.settings.hotKey)
     }
 
@@ -40,6 +42,7 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     permissionsSection
+                    updatesSection
                     hotKeySection
                     routesSection
                 }
@@ -141,6 +144,26 @@ struct SettingsView: View {
 
                 Spacer()
             }
+        }
+    }
+
+    private var updatesSection: some View {
+        SettingsSection(
+            title: "Updates",
+            subtitle: "Signed releases are checked from the Markup GitHub feed."
+        ) {
+            HStack(spacing: 10) {
+                Button {
+                    appUpdater.checkForUpdates(nil)
+                } label: {
+                    Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(!appUpdater.canCheckForUpdates)
+
+                Spacer()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
         }
     }
 

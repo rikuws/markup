@@ -2,6 +2,7 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let settingsStore = SettingsStore()
+    private let appUpdater = AppUpdater()
     private var statusBarController: StatusBarController?
     private var captureCoordinator: CaptureCoordinator?
     private var settingsWindowController: SettingsWindowController?
@@ -13,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let status = StatusBarController(
             settingsStore: settingsStore,
+            appUpdater: appUpdater,
             capture: { coordinator.captureFeedback() },
             openSettings: { [weak self] in self?.showSettings() },
             openFeedbackFolder: { [weak self] in self?.openCurrentFeedbackFolder() },
@@ -33,7 +35,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSettings() {
         if settingsWindowController == nil {
-            settingsWindowController = SettingsWindowController(settingsStore: settingsStore)
+            settingsWindowController = SettingsWindowController(
+                settingsStore: settingsStore,
+                appUpdater: appUpdater
+            )
         }
 
         NSApp.activate(ignoringOtherApps: true)

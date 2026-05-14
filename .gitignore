@@ -4,4 +4,5 @@ dist/
 DerivedData/
 *.xcuserstate
 *.p12
+sparkle_private_key*
 .DS_Store
