@@ -5,6 +5,7 @@ Markup is a local-first macOS menu bar app for turning visual UI feedback into a
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-black?style=for-the-badge)](#install)
 [![SwiftPM 5.9](https://img.shields.io/badge/SwiftPM-5.9-orange?style=for-the-badge)](Package.swift)
 [![Local first](https://img.shields.io/badge/local-first-blue?style=for-the-badge)](#privacy)
+[![Build and Release](https://github.com/rikuws/markup/actions/workflows/release.yml/badge.svg)](https://github.com/rikuws/markup/actions/workflows/release.yml)
 
 - active-window capture from the menu bar or `Cmd+Shift+M`
 - one clear marked region plus a typed or dictated instruction
@@ -13,6 +14,12 @@ Markup is a local-first macOS menu bar app for turning visual UI feedback into a
 - plain-file `.markup/feedback` bundles for people and coding agents
 
 ## Install
+
+Download the latest macOS build:
+
+- [Download latest DMG](https://github.com/rikuws/markup/releases/latest/download/markup-latest-macos.dmg)
+- [Download latest ZIP](https://github.com/rikuws/markup/releases/latest/download/markup-latest-macos.zip)
+- [View all releases](https://github.com/rikuws/markup/releases/latest)
 
 Build the app bundle locally:
 
@@ -36,6 +43,10 @@ For a distributable package:
 ```
 
 Packaging requires a `Developer ID Application` certificate by default. For a local-only package with a development identity, set `MARKUP_ALLOW_DEVELOPMENT_PACKAGE=1`.
+
+### Release CI
+
+GitHub Actions builds a macOS package for pull requests, `main`, and manual workflow runs. Pushing a `v*` tag also creates or updates the matching GitHub Release, uploads versioned DMG/ZIP assets, and publishes the stable `markup-latest-macos.dmg` and `markup-latest-macos.zip` assets used by the links above.
 
 ## Quick Start
 

@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/.build/Markup.app"
 EXECUTABLE="$ROOT/.build/release/Markup"
 RESOURCE_DIR="$ROOT/Sources/Markup/Resources"
+VERSION="${MARKUP_VERSION:-0.1.0}"
+BUILD_NUMBER="${MARKUP_BUILD_NUMBER:-1}"
 
 source "$ROOT/scripts/signing.sh"
 
@@ -59,6 +61,9 @@ PLIST
 if [[ -d "$RESOURCE_DIR" ]]; then
   cp -R "$RESOURCE_DIR"/. "$APP/Contents/Resources/"
 fi
+
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 
 markup_print_signing_choice "$SIGN_IDENTITY"
 
