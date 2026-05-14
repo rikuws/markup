@@ -59,10 +59,10 @@ COMMAND=(
 
 if [[ -n "${MARKUP_SPARKLE_PRIVATE_ED_KEY_FILE:-}" ]]; then
   COMMAND+=(--ed-key-file "$MARKUP_SPARKLE_PRIVATE_ED_KEY_FILE" "$UPDATE_DIR")
-  "${COMMAND[@]}"
+  "${COMMAND[@]}" >&2
 else
   COMMAND+=(--ed-key-file - "$UPDATE_DIR")
-  printf '%s\n' "$MARKUP_SPARKLE_PRIVATE_ED_KEY" | "${COMMAND[@]}"
+  printf '%s\n' "$MARKUP_SPARKLE_PRIVATE_ED_KEY" | "${COMMAND[@]}" >&2
 fi
 
 echo "$APPCAST"
