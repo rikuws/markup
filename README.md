@@ -28,6 +28,18 @@ Markup requires macOS 13 or newer. Give it Screen Recording permission when macO
 
 Each saved capture includes the note, metadata, marked screenshot, original screenshot, and optional recording.
 
+## Coding Agent Skill
+
+Markup includes a reusable agent skill in `skills/markup-feedbacks`. Install that folder into any compatible coding agent's local skills or instructions directory, then ask the agent to process pending Markup feedback in the current repo.
+
+For example:
+
+```text
+Use the Markup feedbacks skill to process the oldest pending feedback bundle in this repo.
+```
+
+The skill guides the agent to read each bundle's instruction, metadata, screenshots, and optional recording, implement the requested fix, verify it, and remove the bundle only after the work is done.
+
 ## Privacy
 
 Markup is local-first. Captures are written to the project route you configure, and the app does not upload them.
