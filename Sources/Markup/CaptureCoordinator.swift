@@ -129,7 +129,7 @@ final class CaptureCoordinator {
     }
 
     private func requestRoute(for captured: CapturedWindow) -> AppRoute? {
-        if let route = settingsStore.route(for: captured.bundleId) {
+        if let route = settingsStore.route(for: captured.routeKey) {
             return route
         }
 
@@ -137,7 +137,7 @@ final class CaptureCoordinator {
         NSApp.activate(ignoringOtherApps: true)
 
         let panel = NSOpenPanel()
-        panel.message = "Choose the project folder for \(captured.appName)"
+        panel.message = "Choose the project folder for \(captured.routeName)"
         panel.prompt = "Use This Project"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -147,19 +147,19 @@ final class CaptureCoordinator {
             return nil
         }
 
-        let feedbackPath = promptFeedbackPath(appName: captured.appName)
+        let feedbackPath = promptFeedbackPath(appName: captured.routeName)
         settingsStore.upsertRoute(
-            bundleId: captured.bundleId,
-            appName: captured.appName,
+            bundleId: captured.routeKey,
+            appName: captured.routeName,
             projectRoot: projectRoot,
             feedbackPath: feedbackPath
         )
 
-        return settingsStore.route(for: captured.bundleId)
+        return settingsStore.route(for: captured.routeKey)
     }
 
     private func routeForSave(_ captured: CapturedWindow) -> AppRoute? {
-        settingsStore.route(for: captured.bundleId) ?? requestRoute(for: captured)
+        settingsStore.route(for: captured.routeKey) ?? requestRoute(for: captured)
     }
 
     private func promptFeedbackPath(appName: String) -> String {

@@ -22,7 +22,7 @@ final class FeedbackBundleWriter {
         recordingURL: URL?
     ) throws -> URL {
         let now = Date()
-        let id = makeID(date: now, appName: captured.appName)
+        let id = makeID(date: now, appName: captured.routeName)
         let directory = route.feedbackDirectoryURL.appendingPathComponent(id, isDirectory: true)
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -49,6 +49,7 @@ final class FeedbackBundleWriter {
                 name: captured.appName,
                 windowTitle: captured.windowTitle
             ),
+            browser: captured.browserPage,
             project: .init(
                 root: route.projectRoot,
                 feedbackPath: route.feedbackPath
@@ -115,6 +116,7 @@ final class FeedbackBundleWriter {
         - Captured app: \(captured.appName)
         - Bundle ID: \(captured.bundleId)
         - Window title: \(captured.windowTitle)
+        \(browserContextMarkdown(captured.browserPage))
         - Captured at: \(metadata.createdAt)
         - Optional recording: \(hasRecording ? "`\(FeedbackAssetNames.recording)`" : "not attached")
 
@@ -122,6 +124,21 @@ final class FeedbackBundleWriter {
         - The issue described in the note is addressed.
         - The highlighted UI region no longer exhibits the problem.
         """
+    }
+
+    private func browserContextMarkdown(_ browserPage: BrowserPageContext?) -> String {
+        guard let browserPage else { return "" }
+
+        var lines = [
+            "- Browser route: \(browserPage.routeName)",
+            "- Browser title: \(browserPage.title)"
+        ]
+
+        if let url = browserPage.url {
+            lines.append("- Browser URL: \(url)")
+        }
+
+        return lines.joined(separator: "\n")
     }
 }
 

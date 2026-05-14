@@ -1,0 +1,4 @@
+interface:
+  display_name: "Markup Feedbacks"
+  short_description: "Process Markup visual feedback bundles from a repo."
+  default_prompt: "Find Markup feedback bundles in this repo, implement the requested fixes, verify them, and delete each processed feedback bundle only after it is handled."

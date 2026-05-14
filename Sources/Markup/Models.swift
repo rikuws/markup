@@ -66,6 +66,22 @@ struct CapturedWindow {
     var windowTitle: String
     var processIdentifier: pid_t
     var windowID: CGWindowID?
+    var browserPage: BrowserPageContext?
+
+    var routeKey: String {
+        browserPage?.routeKey ?? bundleId
+    }
+
+    var routeName: String {
+        browserPage?.routeName ?? appName
+    }
+}
+
+struct BrowserPageContext: Codable, Equatable {
+    var url: String?
+    var title: String
+    var routeKey: String
+    var routeName: String
 }
 
 struct FeedbackAssetNames {
@@ -108,6 +124,7 @@ struct FeedbackMetadata: Codable {
     var id: String
     var createdAt: String
     var app: AppMetadata
+    var browser: BrowserPageContext?
     var project: ProjectMetadata
     var capture: CaptureMetadata
     var assets: AssetsMetadata

@@ -19,6 +19,8 @@ final class ActiveWindowCapturer {
             return nil
         }
 
+        let routeTarget = RouteTargetResolver.target(for: app, windowTitle: title)
+
         NSLog("Markup: capturing window \(cgWindow.id) title='\(cgWindow.title ?? "")' bounds=\(NSStringFromRect(cgWindow.bounds)) for \(appName)")
 
         guard let image = captureWindowImage(windowID: cgWindow.id)
@@ -34,7 +36,8 @@ final class ActiveWindowCapturer {
             bundleId: bundleId,
             windowTitle: title,
             processIdentifier: pid,
-            windowID: cgWindow.id
+            windowID: cgWindow.id,
+            browserPage: routeTarget.browserPage
         )
     }
 

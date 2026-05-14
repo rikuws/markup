@@ -42,9 +42,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openCurrentFeedbackFolder() {
-        guard let app = NSWorkspace.shared.frontmostApplication,
-              let route = settingsStore.route(for: app.bundleIdentifier ?? "")
+        guard let app = NSWorkspace.shared.frontmostApplication
         else {
+            showSettings()
+            return
+        }
+
+        let target = RouteTargetResolver.target(for: app)
+        guard let route = settingsStore.route(for: target.key) else {
             showSettings()
             return
         }

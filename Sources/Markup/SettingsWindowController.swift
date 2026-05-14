@@ -147,7 +147,7 @@ struct SettingsView: View {
     private var routesSection: some View {
         SettingsSection(
             title: "App Routes",
-            subtitle: "Each app can save feedback into a different project folder."
+            subtitle: "Apps route by app identity. Browser captures route by the current page or project."
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 if sortedRoutes.isEmpty {
@@ -196,9 +196,10 @@ struct SettingsView: View {
 
     private func addRouteForFrontmostApp() {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        let target = RouteTargetResolver.target(for: app)
         RoutePrompts.configureRoute(
-            bundleId: app.bundleIdentifier ?? "unknown.bundle",
-            appName: app.localizedName ?? "Unknown App",
+            bundleId: target.key,
+            appName: target.name,
             settingsStore: settingsStore
         )
     }
