@@ -3,4 +3,5 @@ dist/
 .swiftpm/
 DerivedData/
 *.xcuserstate
+*.p12
 .DS_Store

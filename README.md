@@ -46,7 +46,21 @@ Packaging requires a `Developer ID Application` certificate by default. For a lo
 
 ### Release CI
 
-GitHub Actions builds a macOS package for pull requests, `main`, and manual workflow runs. Pushing a `v*` tag also creates or updates the matching GitHub Release, uploads versioned DMG/ZIP assets, and publishes the stable `markup-latest-macos.dmg` and `markup-latest-macos.zip` assets used by the links above.
+GitHub Actions builds an ad hoc signed macOS package for pull requests, `main`, and manual workflow runs. Pushing a `v*` tag requires Developer ID signing secrets, notarizes the DMG, creates or updates the matching GitHub Release, uploads versioned DMG/ZIP assets, and publishes the stable `markup-latest-macos.dmg` and `markup-latest-macos.zip` assets used by the links above.
+
+Add these repository secrets before publishing a release tag:
+
+- `MARKUP_DEVELOPER_ID_CERTIFICATE_BASE64`: base64-encoded `.p12` export of the `Developer ID Application` certificate and private key
+- `MARKUP_DEVELOPER_ID_CERTIFICATE_PASSWORD`: password used when exporting the `.p12`
+- `MARKUP_APPLE_ID`: Apple ID used for notarization
+- `MARKUP_APPLE_APP_SPECIFIC_PASSWORD`: app-specific password for that Apple ID
+- `MARKUP_APPLE_TEAM_ID`: Apple Developer Team ID
+
+To prepare the certificate secret locally:
+
+```bash
+base64 -i DeveloperIDApplication.p12 | pbcopy
+```
 
 ## Quick Start
 

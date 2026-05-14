@@ -17,8 +17,12 @@ jobs:
     name: macOS app package
     runs-on: macos-latest
     env:
-      MARKUP_ALLOW_DEVELOPMENT_PACKAGE: "1"
-      MARKUP_SIGNING_MODE: adhoc
+      MARKUP_DEVELOPER_ID_CERTIFICATE_BASE64: ${{ secrets.MARKUP_DEVELOPER_ID_CERTIFICATE_BASE64 }}
+      MARKUP_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.MARKUP_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+      MARKUP_APPLE_ID: ${{ secrets.MARKUP_APPLE_ID }}
+      MARKUP_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MARKUP_APPLE_APP_SPECIFIC_PASSWORD }}
+      MARKUP_APPLE_TEAM_ID: ${{ secrets.MARKUP_APPLE_TEAM_ID }}
+      NOTARYTOOL_PROFILE: markup-notary
 
     steps:
       - name: Check out repository
@@ -30,8 +34,82 @@ jobs:
           echo "MARKUP_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
           echo "MARKUP_BUILD_NUMBER=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
 
+      - name: Validate release signing secrets
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for name in \
+            MARKUP_DEVELOPER_ID_CERTIFICATE_BASE64 \
+            MARKUP_DEVELOPER_ID_CERTIFICATE_PASSWORD \
+            MARKUP_APPLE_ID \
+            MARKUP_APPLE_APP_SPECIFIC_PASSWORD \
+            MARKUP_APPLE_TEAM_ID; do
+            if [[ -z "${!name:-}" ]]; then
+              missing+=("$name")
+            fi
+          done
+
+          if ((${#missing[@]})); then
+            printf '::error::Missing GitHub release signing secret(s): %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+      - name: Import Developer ID certificate
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+
+          certificate_path="$RUNNER_TEMP/developer-id-application.p12"
+          keychain_path="$RUNNER_TEMP/markup-signing.keychain-db"
+          keychain_password="$(uuidgen)"
+
+          printf '%s' "$MARKUP_DEVELOPER_ID_CERTIFICATE_BASE64" | base64 --decode > "$certificate_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -P "$MARKUP_DEVELOPER_ID_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -s "$keychain_path"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security find-identity -p codesigning -v
+
       - name: Build distributable package
-        run: ./scripts/package-app.sh
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            export MARKUP_SIGNING_MODE=developer-id
+          else
+            export MARKUP_ALLOW_DEVELOPMENT_PACKAGE=1
+            export MARKUP_SIGNING_MODE=adhoc
+          fi
+
+          ./scripts/package-app.sh
+
+      - name: Notarize release DMG
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+
+          xcrun notarytool store-credentials "$NOTARYTOOL_PROFILE" \
+            --apple-id "$MARKUP_APPLE_ID" \
+            --team-id "$MARKUP_APPLE_TEAM_ID" \
+            --password "$MARKUP_APPLE_APP_SPECIFIC_PASSWORD"
+
+          dmg="$(find dist -maxdepth 1 -name 'markup-*.dmg' -print | sort | tail -n 1)"
+          ./scripts/notarize-app.sh "$dmg"
 
       - name: Prepare release assets
         run: |
