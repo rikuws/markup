@@ -230,11 +230,6 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         noteTextView.isVerticallyResizable = true
         noteTextView.isHorizontallyResizable = false
         noteTextView.autoresizingMask = [.width]
-        noteTextView.textContainer?.containerSize = NSSize(
-            width: noteTextView.bounds.width,
-            height: CGFloat.greatestFiniteMagnitude
-        )
-        noteTextView.textContainer?.widthTracksTextView = true
         noteTextView.font = .systemFont(ofSize: 15, weight: .regular)
         noteTextView.textColor = .white
         noteTextView.insertionPointColor = .white
@@ -243,6 +238,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         noteTextView.backgroundColor = .clear
         noteTextView.textContainerInset = NSSize(width: 18, height: 16)
         noteTextView.textContainer?.lineFragmentPadding = 0
+        noteTextView.textContainer?.lineBreakMode = .byWordWrapping
+        noteTextView.updateWrappingWidth()
         noteTextView.isRichText = false
         noteTextView.allowsUndo = true
         noteTextView.string = ""
@@ -630,6 +627,24 @@ final class PlaceholderTextView: NSTextView {
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateWrappingWidth()
+        needsDisplay = true
+    }
+
+    fileprivate func updateWrappingWidth() {
+        guard let textContainer else { return }
+
+        let horizontalInset = textContainerInset.width * 2
+        let wrappingWidth = max(1, bounds.width - horizontalInset)
+        textContainer.widthTracksTextView = false
+        textContainer.containerSize = NSSize(
+            width: wrappingWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
     }
 
     override func draw(_ dirtyRect: NSRect) {
