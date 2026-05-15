@@ -12,7 +12,7 @@ Markup requires macOS 13 or newer. Give it Screen Recording permission when macO
 
 ## Updates
 
-Markup uses Sparkle for native macOS updates. The first Sparkle-capable release still has to be installed from the DMG; later releases can be installed from the app's Check for Updates action.
+Markup uses Sparkle for native macOS updates. The first Sparkle-capable release still has to be installed from the DMG; later releases can be installed from the app's Check for Updates action. Markup also checks once per day and notifies you when a signed release is available.
 
 Tagged GitHub releases require these secrets:
 

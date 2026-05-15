@@ -152,15 +152,24 @@ struct SettingsView: View {
             title: "Updates",
             subtitle: "Signed releases are checked from the Markup GitHub feed."
         ) {
-            HStack(spacing: 10) {
-                Button {
-                    appUpdater.checkForUpdates(nil)
-                } label: {
-                    Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle(isOn: Binding(
+                    get: { appUpdater.automaticallyChecksForUpdates },
+                    set: { appUpdater.setAutomaticallyChecksForUpdates($0) }
+                )) {
+                    Label("Notify me about updates automatically", systemImage: "bell.badge")
                 }
-                .disabled(!appUpdater.canCheckForUpdates)
 
-                Spacer()
+                HStack(spacing: 10) {
+                    Button {
+                        appUpdater.checkForUpdates(nil)
+                    } label: {
+                        Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(!appUpdater.canCheckForUpdates)
+
+                    Spacer()
+                }
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
@@ -357,7 +366,7 @@ struct RouteRow: View {
                         bundleId: route.bundleId,
                         appName: route.appName,
                         settingsStore: settingsStore,
-                        existingPath: route.feedbackPath
+                        existingRoute: route
                     )
                 } label: {
                     Image(systemName: "slider.horizontal.3")
@@ -390,30 +399,39 @@ struct RouteRow: View {
 }
 
 enum RoutePrompts {
+    @discardableResult
     static func configureRoute(
         bundleId: String,
         appName: String,
         settingsStore: SettingsStore,
-        existingPath: String = ".markup/feedback"
-    ) {
+        existingRoute: AppRoute? = nil,
+        existingPath: String = ".markup/feedback",
+        asksFeedbackPath: Bool = true
+    ) -> AppRoute? {
         let panel = NSOpenPanel()
         panel.message = "Choose the project folder for \(appName)"
         panel.prompt = "Use This Project"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
+        panel.directoryURL = existingRoute?.projectRootURL
 
         guard panel.runModal() == .OK, let projectRoot = panel.url else {
-            return
+            return nil
         }
 
-        let feedbackPath = promptFeedbackPath(appName: appName, existingPath: existingPath)
+        let currentFeedbackPath = existingRoute?.feedbackPath ?? existingPath
+        let feedbackPath = asksFeedbackPath
+            ? promptFeedbackPath(appName: appName, existingPath: currentFeedbackPath)
+            : currentFeedbackPath.trimmedFeedbackPath
         settingsStore.upsertRoute(
             bundleId: bundleId,
             appName: appName,
             projectRoot: projectRoot,
             feedbackPath: feedbackPath
         )
+
+        return settingsStore.route(for: bundleId)
     }
 
     private static func promptFeedbackPath(appName: String, existingPath: String) -> String {

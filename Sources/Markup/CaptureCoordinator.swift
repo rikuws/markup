@@ -29,6 +29,7 @@ final class CaptureCoordinator {
 
         let controller = AnnotationWindowController(
             captured: captured,
+            route: settingsStore.route(for: captured.routeKey),
             recordingURL: recordingURL,
             onSave: { [weak self] note, region, annotatedImage, originalImage, recordingURL in
                 self?.saveFeedback(
@@ -39,6 +40,9 @@ final class CaptureCoordinator {
                     originalImage: originalImage,
                     recordingURL: recordingURL
                 )
+            },
+            onChangeRoute: { [weak self] existingRoute in
+                self?.changeRoute(for: captured, existingRoute: existingRoute)
             },
             onCancel: { [weak self] in
                 self?.overlayController = nil
@@ -133,49 +137,44 @@ final class CaptureCoordinator {
             return route
         }
 
-        overlayController?.window?.orderOut(nil)
-        NSApp.activate(ignoringOtherApps: true)
-
-        let panel = NSOpenPanel()
-        panel.message = "Choose the project folder for \(captured.routeName)"
-        panel.prompt = "Use This Project"
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-
-        guard panel.runModal() == .OK, let projectRoot = panel.url else {
-            return nil
-        }
-
-        let feedbackPath = promptFeedbackPath(appName: captured.routeName)
-        settingsStore.upsertRoute(
-            bundleId: captured.routeKey,
-            appName: captured.routeName,
-            projectRoot: projectRoot,
-            feedbackPath: feedbackPath
-        )
-
-        return settingsStore.route(for: captured.routeKey)
+        return changeRoute(for: captured, existingRoute: nil)
     }
 
     private func routeForSave(_ captured: CapturedWindow) -> AppRoute? {
         settingsStore.route(for: captured.routeKey) ?? requestRoute(for: captured)
     }
 
-    private func promptFeedbackPath(appName: String) -> String {
-        let alert = NSAlert()
-        alert.messageText = "Feedback Folder"
-        alert.informativeText = "Choose the relative folder inside this project for \(appName)."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Use Default")
+    private func changeRoute(for captured: CapturedWindow, existingRoute: AppRoute?) -> AppRoute? {
+        let currentRoute = existingRoute ?? settingsStore.route(for: captured.routeKey)
 
-        let field = NSTextField(string: ".markup/feedback")
-        field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
-        alert.accessoryView = field
+        return withOverlayTemporarilyHidden {
+            RoutePrompts.configureRoute(
+                bundleId: captured.routeKey,
+                appName: captured.routeName,
+                settingsStore: settingsStore,
+                existingRoute: currentRoute,
+                asksFeedbackPath: currentRoute == nil
+            )
+        }
+    }
 
-        return alert.runModal() == .alertFirstButtonReturn
-            ? field.stringValue.trimmedFeedbackPath
-            : ".markup/feedback"
+    private func withOverlayTemporarilyHidden<T>(_ action: () -> T) -> T {
+        let overlayWindow = overlayController?.window
+        let shouldRestoreOverlay = overlayWindow?.isVisible == true
+
+        if shouldRestoreOverlay {
+            overlayWindow?.orderOut(nil)
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let result = action()
+
+        if shouldRestoreOverlay {
+            overlayWindow?.orderFrontRegardless()
+            overlayWindow?.makeKey()
+        }
+
+        return result
     }
 
     private func showAlert(title: String, message: String) {

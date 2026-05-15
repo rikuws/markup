@@ -5,15 +5,19 @@ final class AnnotationWindowController: NSWindowController {
 
     init(
         captured: CapturedWindow,
+        route: AppRoute?,
         recordingURL: URL?,
         onSave: @escaping (String, CaptureRegion, NSImage, NSImage, URL?) -> Void,
+        onChangeRoute: @escaping (AppRoute?) -> AppRoute?,
         onCancel: @escaping () -> Void,
         onRecord: @escaping () -> Void
     ) {
         viewController = AnnotationViewController(
             captured: captured,
+            route: route,
             recordingURL: recordingURL,
             onSave: onSave,
+            onChangeRoute: onChangeRoute,
             onCancel: onCancel,
             onRecord: onRecord
         )
@@ -70,12 +74,15 @@ final class AnnotationOverlayWindow: NSWindow {
 
 final class AnnotationViewController: NSViewController, NSTextViewDelegate {
     private let captured: CapturedWindow
+    private var route: AppRoute?
     private let recordingURL: URL?
     private let onSave: (String, CaptureRegion, NSImage, NSImage, URL?) -> Void
+    private let onChangeRoute: (AppRoute?) -> AppRoute?
     private let onCancel: () -> Void
     private let onRecord: () -> Void
 
     private let canvas: AnnotationCanvasView
+    private let projectRouteView = ProjectRouteView()
     private let noteTextView = PlaceholderTextView(placeholder: "Describe what should change, what looks wrong, or what the agent should fix.")
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let recordingBadge = NSTextField(labelWithString: "")
@@ -86,14 +93,18 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
 
     init(
         captured: CapturedWindow,
+        route: AppRoute?,
         recordingURL: URL?,
         onSave: @escaping (String, CaptureRegion, NSImage, NSImage, URL?) -> Void,
+        onChangeRoute: @escaping (AppRoute?) -> AppRoute?,
         onCancel: @escaping () -> Void,
         onRecord: @escaping () -> Void
     ) {
         self.captured = captured
+        self.route = route
         self.recordingURL = recordingURL
         self.onSave = onSave
+        self.onChangeRoute = onChangeRoute
         self.onCancel = onCancel
         self.onRecord = onRecord
         canvas = AnnotationCanvasView(image: captured.image)
@@ -187,6 +198,12 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         headerRow.alignment = .centerY
         headerRow.distribution = .fill
 
+        projectRouteView.translatesAutoresizingMaskIntoConstraints = false
+        projectRouteView.configure(captured: captured, route: route)
+        projectRouteView.onChange = { [weak self] in
+            self?.changeRouteSelected()
+        }
+
         canvas.translatesAutoresizingMaskIntoConstraints = false
         canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
 
@@ -265,6 +282,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         noteSection.addSubview(noteSurface)
 
         container.addArrangedSubview(headerRow)
+        container.addArrangedSubview(projectRouteView)
         container.addArrangedSubview(canvas)
         container.addArrangedSubview(noteSection)
         container.addArrangedSubview(actions)
@@ -274,6 +292,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
             container.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -28),
             container.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            projectRouteView.heightAnchor.constraint(greaterThanOrEqualToConstant: 58),
             noteLabel.topAnchor.constraint(equalTo: noteSection.topAnchor),
             noteLabel.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor, constant: 2),
             noteSurface.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor),
@@ -305,6 +324,15 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         onSave(note, region, annotated, captured.image, recordingURL)
     }
 
+    private func changeRouteSelected() {
+        guard let updatedRoute = onChangeRoute(route) else {
+            return
+        }
+
+        route = updatedRoute
+        projectRouteView.configure(captured: captured, route: updatedRoute)
+    }
+
     @objc private func cancelSelected() {
         cancelAnnotation()
     }
@@ -321,6 +349,144 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
     private func updateSaveState() {
         let note = noteTextView.string.trimmingCharacters(in: .whitespacesAndNewlines)
         saveButton.isEnabled = canvas.captureRegion != nil && !note.isEmpty
+    }
+}
+
+final class ProjectRouteView: NSView {
+    var onChange: (() -> Void)?
+
+    private let effectView = NSVisualEffectView()
+    private let tintView = NSView()
+    private let accentView = NSView()
+    private let eyebrowLabel = NSTextField(labelWithString: "SAVING TO")
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private let changeButton = NSButton(title: "Change", target: nil, action: nil)
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func configure(captured: CapturedWindow, route: AppRoute?) {
+        if let route {
+            let projectName = route.projectRootURL.lastPathComponent.isEmpty
+                ? route.projectRoot
+                : route.projectRootURL.lastPathComponent
+            let destination = route.feedbackDirectoryURL.path
+
+            titleLabel.stringValue = projectName
+            detailLabel.stringValue = destination
+            detailLabel.toolTip = destination
+            changeButton.title = "Change"
+            accentView.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.95).cgColor
+        } else {
+            titleLabel.stringValue = "No project selected"
+            detailLabel.stringValue = captured.routeName
+            detailLabel.toolTip = captured.routeName
+            changeButton.title = "Set Project"
+            accentView.layer?.backgroundColor = NSColor.systemYellow.withAlphaComponent(0.95).cgColor
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.shadowPath = CGPath(
+            roundedRect: bounds,
+            cornerWidth: 12,
+            cornerHeight: 12,
+            transform: nil
+        )
+    }
+
+    @objc private func changeSelected() {
+        onChange?()
+    }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.masksToBounds = false
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.16
+        layer?.shadowRadius = 12
+        layer?.shadowOffset = NSSize(width: 0, height: -4)
+
+        effectView.translatesAutoresizingMaskIntoConstraints = false
+        effectView.material = .hudWindow
+        effectView.blendingMode = .withinWindow
+        effectView.state = .active
+        effectView.wantsLayer = true
+        effectView.layer?.cornerRadius = 12
+        effectView.layer?.masksToBounds = true
+
+        tintView.translatesAutoresizingMaskIntoConstraints = false
+        tintView.wantsLayer = true
+        tintView.layer?.backgroundColor = NSColor(calibratedWhite: 0.08, alpha: 0.80).cgColor
+        tintView.layer?.cornerRadius = 12
+        tintView.layer?.masksToBounds = true
+
+        accentView.translatesAutoresizingMaskIntoConstraints = false
+        accentView.wantsLayer = true
+        accentView.layer?.cornerRadius = 2
+
+        eyebrowLabel.font = .systemFont(ofSize: 10, weight: .bold)
+        eyebrowLabel.textColor = NSColor.white.withAlphaComponent(0.50)
+        eyebrowLabel.lineBreakMode = .byTruncatingTail
+
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+
+        detailLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        detailLabel.textColor = NSColor.white.withAlphaComponent(0.66)
+        detailLabel.lineBreakMode = .byTruncatingMiddle
+        detailLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let textStack = NSStackView(views: [eyebrowLabel, titleLabel, detailLabel])
+        textStack.translatesAutoresizingMaskIntoConstraints = false
+        textStack.orientation = .vertical
+        textStack.alignment = .leading
+        textStack.spacing = 2
+
+        changeButton.target = self
+        changeButton.action = #selector(changeSelected)
+        changeButton.bezelStyle = .rounded
+        changeButton.controlSize = .large
+        changeButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let content = NSStackView(views: [accentView, textStack, NSView(), changeButton])
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.orientation = .horizontal
+        content.alignment = .centerY
+        content.spacing = 12
+        content.distribution = .fill
+
+        addSubview(effectView)
+        addSubview(tintView, positioned: .above, relativeTo: effectView)
+        addSubview(content, positioned: .above, relativeTo: tintView)
+
+        NSLayoutConstraint.activate([
+            effectView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            effectView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            effectView.topAnchor.constraint(equalTo: topAnchor),
+            effectView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            tintView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            tintView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            tintView.topAnchor.constraint(equalTo: topAnchor),
+            tintView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            content.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            content.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
+            accentView.widthAnchor.constraint(equalToConstant: 4),
+            accentView.heightAnchor.constraint(equalTo: content.heightAnchor, multiplier: 0.70)
+        ])
     }
 }
 
