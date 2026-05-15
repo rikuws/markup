@@ -28,6 +28,11 @@ GENERATE_APPCAST="$(markup_find_sparkle_tool "$ROOT" "generate_appcast")"
 ARCHIVE_NAME="$(basename "$ZIP")"
 APPCAST="$UPDATE_DIR/appcast.xml"
 
+case "$RELEASE_BASE_URL" in
+  */) ;;
+  *) RELEASE_BASE_URL="$RELEASE_BASE_URL/" ;;
+esac
+
 rm -rf "$UPDATE_DIR"
 mkdir -p "$UPDATE_DIR"
 cp "$ZIP" "$UPDATE_DIR/$ARCHIVE_NAME"
