@@ -334,6 +334,7 @@ final class StatusBarController: NSObject {
 
 extension StatusBarController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
+        appUpdater.refreshState()
         rebuildMenu(menu)
     }
 }
