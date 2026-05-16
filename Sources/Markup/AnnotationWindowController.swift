@@ -101,6 +101,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
     private let recordButton = NSButton(title: "Record 10s", target: nil, action: nil)
     private let recordingBadge = NSTextField(labelWithString: "")
     private var selectedShotID: UUID
+    private var visibleAppendBadgeConstraints: [NSLayoutConstraint] = []
 
     var initialFirstResponder: NSResponder {
         canvas
@@ -216,27 +217,45 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         helperLabel.lineBreakMode = .byTruncatingTail
 
         let titleStack = NSStackView(views: [headerLabel, windowTitleLabel, helperLabel])
+        titleStack.translatesAutoresizingMaskIntoConstraints = false
         titleStack.orientation = .vertical
         titleStack.alignment = .leading
         titleStack.spacing = 3
+        titleStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         recordingBadge.textColor = .systemGreen
         recordingBadge.font = .systemFont(ofSize: 12, weight: .semibold)
+        recordingBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
 
         let shortcutHints = NSStackView(views: [
             ShortcutHintView(key: "Esc", label: "Cancel"),
             ShortcutHintView(key: "Return", label: "Save")
         ])
+        shortcutHints.translatesAutoresizingMaskIntoConstraints = false
         shortcutHints.orientation = .horizontal
         shortcutHints.spacing = 12
         shortcutHints.alignment = .centerY
         shortcutHints.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let headerRow = NSStackView(views: [titleStack, NSView(), appendBadge, shortcutHints, recordingBadge])
-        headerRow.orientation = .horizontal
-        headerRow.spacing = 14
-        headerRow.alignment = .centerY
-        headerRow.distribution = .fill
+        let rightControls = NSStackView(views: [shortcutHints, recordingBadge])
+        rightControls.translatesAutoresizingMaskIntoConstraints = false
+        rightControls.orientation = .horizontal
+        rightControls.spacing = 14
+        rightControls.alignment = .centerY
+        rightControls.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        appendBadge.translatesAutoresizingMaskIntoConstraints = false
+
+        let headerRow = NSView()
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+        headerRow.addSubview(titleStack)
+        headerRow.addSubview(appendBadge)
+        headerRow.addSubview(rightControls)
+
+        visibleAppendBadgeConstraints = [
+            titleStack.trailingAnchor.constraint(lessThanOrEqualTo: appendBadge.leadingAnchor, constant: -14),
+            appendBadge.trailingAnchor.constraint(lessThanOrEqualTo: rightControls.leadingAnchor, constant: -14)
+        ]
 
         projectRouteView.translatesAutoresizingMaskIntoConstraints = false
         projectRouteView.configure(captured: draft.primaryCapture, route: route)
@@ -367,6 +386,17 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             container.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -28),
             container.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            headerRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            titleStack.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor),
+            titleStack.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
+            titleStack.topAnchor.constraint(greaterThanOrEqualTo: headerRow.topAnchor),
+            titleStack.bottomAnchor.constraint(lessThanOrEqualTo: headerRow.bottomAnchor),
+            titleStack.trailingAnchor.constraint(lessThanOrEqualTo: rightControls.leadingAnchor, constant: -14),
+            appendBadge.centerXAnchor.constraint(equalTo: headerRow.centerXAnchor),
+            appendBadge.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
+            rightControls.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor),
+            rightControls.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
+            rightControls.leadingAnchor.constraint(greaterThanOrEqualTo: headerRow.centerXAnchor, constant: 14),
             projectRouteView.heightAnchor.constraint(greaterThanOrEqualToConstant: 58),
             shotStripRow.heightAnchor.constraint(equalToConstant: 76),
             labelField.heightAnchor.constraint(equalToConstant: 28),
@@ -387,7 +417,11 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         headerLabel.stringValue = shot.captured.appName
         windowTitleLabel.stringValue = shot.captured.windowTitle
         helperLabel.stringValue = helperText(for: index)
-        appendBadge.isHidden = !(showsAppendBanner || draft.shots.count > 1)
+        let showsBadge = showsAppendBanner || draft.shots.count > 1
+        appendBadge.isHidden = !showsBadge
+        for constraint in visibleAppendBadgeConstraints {
+            constraint.isActive = showsBadge
+        }
         recordingBadge.stringValue = draft.recordingURL == nil ? "" : "Recording attached"
         recordingBadge.isHidden = draft.recordingURL == nil
         shotCountLabel.stringValue = "\(draft.shots.count)/\(FeedbackDraft.maximumShots) shots"
@@ -507,21 +541,33 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
     }
 }
 
-final class BadgeLabel: NSTextField {
+final class BadgeLabel: NSView {
+    private let label = NSTextField(labelWithString: "")
+
     init(text: String) {
         super.init(frame: .zero)
-        stringValue = text
-        isEditable = false
-        isBordered = false
-        drawsBackground = false
-        font = .systemFont(ofSize: 11, weight: .semibold)
-        textColor = .white
-        alignment = .center
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.stringValue = text
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .white
+        label.alignment = .center
+        label.lineBreakMode = .byClipping
+
         wantsLayer = true
         layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.78).cgColor
         layer?.cornerRadius = 10
         layer?.masksToBounds = true
+
+        addSubview(label)
         setContentCompressionResistancePriority(.required, for: .horizontal)
+        setContentHuggingPriority(.required, for: .horizontal)
+
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
     }
 
     required init?(coder: NSCoder) {
@@ -529,7 +575,7 @@ final class BadgeLabel: NSTextField {
     }
 
     override var intrinsicContentSize: NSSize {
-        let size = super.intrinsicContentSize
+        let size = label.intrinsicContentSize
         return NSSize(width: size.width + 20, height: 22)
     }
 }
