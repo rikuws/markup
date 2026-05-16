@@ -12,26 +12,60 @@ final class FeedbackBundleWriter {
         isoFormatter.formatOptions = [.withInternetDateTime, .withTimeZone]
     }
 
-    func write(
-        captured: CapturedWindow,
-        route: AppRoute,
-        note: String,
-        region: CaptureRegion,
-        annotatedImage: NSImage,
-        originalImage: NSImage,
-        recordingURL: URL?
-    ) throws -> URL {
+    func write(draft: FeedbackDraft, route: AppRoute) throws -> URL {
+        guard let primaryShot = draft.shots.first else {
+            throw MarkupError("Feedback needs at least one screenshot.")
+        }
+
         let now = Date()
-        let id = makeID(date: now, appName: captured.routeName)
+        let id = makeID(date: now, appName: primaryShot.captured.routeName)
         let directory = route.feedbackDirectoryURL.appendingPathComponent(id, isDirectory: true)
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        try annotatedImage.writePNG(to: directory.appendingPathComponent(FeedbackAssetNames.annotatedScreenshot))
-        try originalImage.writePNG(to: directory.appendingPathComponent(FeedbackAssetNames.originalScreenshot))
+        var captures: [FeedbackMetadata.CaptureItemMetadata] = []
+        for (offset, shot) in draft.shots.enumerated() {
+            let index = offset + 1
+            guard let region = shot.region else {
+                throw MarkupError("Shot \(index) needs a highlighted region.")
+            }
+
+            guard let annotatedImage = ScreenshotAnnotator.annotatedImage(source: shot.captured.image, region: region) else {
+                throw MarkupError("Could not annotate shot \(index).")
+            }
+
+            let annotatedName = FeedbackAssetNames.annotatedScreenshot(for: index)
+            let originalName = FeedbackAssetNames.originalScreenshot(for: index)
+            try annotatedImage.writePNG(to: directory.appendingPathComponent(annotatedName))
+            try shot.captured.image.writePNG(to: directory.appendingPathComponent(originalName))
+
+            let image = shot.captured.image.bestCGImage()
+            let capture = FeedbackMetadata.CaptureMetadata(
+                type: shot.captured.windowID == nil ? "mainDisplayFallback" : "activeWindow",
+                screenshotSize: .init(width: image.width, height: image.height),
+                region: region
+            )
+            captures.append(
+                .init(
+                    index: index,
+                    label: shot.trimmedLabel,
+                    app: .init(
+                        bundleId: shot.captured.bundleId,
+                        name: shot.captured.appName,
+                        windowTitle: shot.captured.windowTitle
+                    ),
+                    browser: shot.captured.browserPage,
+                    capture: capture,
+                    assets: .init(
+                        annotatedScreenshot: annotatedName,
+                        originalScreenshot: originalName
+                    )
+                )
+            )
+        }
 
         var copiedRecording: String?
-        if let recordingURL {
+        if let recordingURL = draft.recordingURL {
             let destination = directory.appendingPathComponent(FeedbackAssetNames.recording)
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
@@ -40,39 +74,35 @@ final class FeedbackBundleWriter {
             copiedRecording = FeedbackAssetNames.recording
         }
 
-        let image = originalImage.bestCGImage()
+        guard let primaryCapture = captures.first else {
+            throw MarkupError("Feedback needs at least one screenshot.")
+        }
+
         let metadata = FeedbackMetadata(
             id: id,
+            schemaVersion: 2,
             createdAt: isoFormatter.string(from: now),
-            app: .init(
-                bundleId: captured.bundleId,
-                name: captured.appName,
-                windowTitle: captured.windowTitle
-            ),
-            browser: captured.browserPage,
+            app: primaryCapture.app,
+            browser: primaryCapture.browser,
             project: .init(
                 root: route.projectRoot,
                 feedbackPath: route.feedbackPath
             ),
-            capture: .init(
-                type: captured.windowID == nil ? "mainDisplayFallback" : "activeWindow",
-                screenshotSize: .init(width: image.width, height: image.height),
-                region: region
-            ),
+            capture: primaryCapture.capture,
             assets: .init(
-                annotatedScreenshot: FeedbackAssetNames.annotatedScreenshot,
-                originalScreenshot: FeedbackAssetNames.originalScreenshot,
+                annotatedScreenshot: primaryCapture.assets.annotatedScreenshot,
+                originalScreenshot: primaryCapture.assets.originalScreenshot,
                 recording: copiedRecording
-            )
+            ),
+            captures: captures
         )
 
         let metadataData = try encoder.encode(metadata)
         try metadataData.write(to: directory.appendingPathComponent(FeedbackAssetNames.metadata), options: .atomic)
 
         let instruction = instructionMarkdown(
-            captured: captured,
+            draft: draft,
             metadata: metadata,
-            note: note,
             hasRecording: copiedRecording != nil
         )
         try instruction.write(
@@ -97,20 +127,27 @@ final class FeedbackBundleWriter {
     }
 
     private func instructionMarkdown(
-        captured: CapturedWindow,
+        draft: FeedbackDraft,
         metadata: FeedbackMetadata,
-        note: String,
         hasRecording: Bool
     ) -> String {
-        """
+        let captured = draft.primaryCapture
+        let screenshotIntro = metadata.captures.count == 1
+            ? "Improve the UI/UX/code issue shown in `\(FeedbackAssetNames.annotatedScreenshot)`."
+            : "Improve the UI/UX/code issue shown across the screenshots in this bundle."
+
+        return """
         # Visual Feedback: \(captured.windowTitle)
 
-        Improve the UI/UX/code issue shown in `\(FeedbackAssetNames.annotatedScreenshot)`.
+        \(screenshotIntro)
 
         User note:
-        > \(note.replacingOccurrences(of: "\n", with: "\n> "))
+        > \(draft.note.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: "\n> "))
 
-        The highlighted region is at x/y/width/height from `\(FeedbackAssetNames.metadata)`.
+        Screenshots:
+        \(screenshotsMarkdown(metadata.captures))
+
+        The highlighted regions are stored as x/y/width/height values in `\(FeedbackAssetNames.metadata)` under `captures[n].capture.region`. `capture` and `assets` also describe Shot 1 for compatibility.
 
         Context:
         - Captured app: \(captured.appName)
@@ -122,8 +159,20 @@ final class FeedbackBundleWriter {
 
         Done when:
         - The issue described in the note is addressed.
-        - The highlighted UI region no longer exhibits the problem.
+        - The highlighted UI regions no longer exhibit the problem.
         """
+    }
+
+    private func screenshotsMarkdown(_ captures: [FeedbackMetadata.CaptureItemMetadata]) -> String {
+        captures.map { capture in
+            var line = "- Shot \(capture.index): `\(capture.assets.annotatedScreenshot)`"
+            if let label = capture.label {
+                line += " - \(label)"
+            }
+            line += " (region: `captures[\(capture.index - 1)].capture.region`)"
+            return line
+        }
+        .joined(separator: "\n")
     }
 
     private func browserContextMarkdown(_ browserPage: BrowserPageContext?) -> String {
@@ -139,6 +188,13 @@ final class FeedbackBundleWriter {
         }
 
         return lines.joined(separator: "\n")
+    }
+}
+
+private extension FeedbackDraftShot {
+    var trimmedLabel: String? {
+        let value = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }
 

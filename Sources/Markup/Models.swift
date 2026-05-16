@@ -90,6 +90,71 @@ struct FeedbackAssetNames {
     static let annotatedScreenshot = "screenshot.png"
     static let originalScreenshot = "screenshot-original.png"
     static let recording = "recording.mov"
+
+    static func annotatedScreenshot(for index: Int) -> String {
+        index <= 1 ? annotatedScreenshot : "screenshot-\(index).png"
+    }
+
+    static func originalScreenshot(for index: Int) -> String {
+        index <= 1 ? originalScreenshot : "screenshot-original-\(index).png"
+    }
+}
+
+final class FeedbackDraft {
+    static let maximumShots = 6
+
+    var route: AppRoute?
+    var note = ""
+    var recordingURL: URL?
+    private(set) var shots: [FeedbackDraftShot]
+
+    init(primaryCapture: CapturedWindow, route: AppRoute?) {
+        self.route = route
+        shots = [FeedbackDraftShot(captured: primaryCapture)]
+    }
+
+    var primaryCapture: CapturedWindow {
+        shots[0].captured
+    }
+
+    var canAddShot: Bool {
+        shots.count < Self.maximumShots
+    }
+
+    var nextShotIndex: Int {
+        min(shots.count + 1, Self.maximumShots)
+    }
+
+    var isComplete: Bool {
+        !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && shots.allSatisfy { $0.region != nil }
+    }
+
+    @discardableResult
+    func append(captured: CapturedWindow) -> FeedbackDraftShot? {
+        guard canAddShot else { return nil }
+        let shot = FeedbackDraftShot(captured: captured)
+        shots.append(shot)
+        return shot
+    }
+
+    func deleteShot(id: UUID) {
+        guard let index = shots.firstIndex(where: { $0.id == id }), index > 0 else {
+            return
+        }
+        shots.remove(at: index)
+    }
+}
+
+final class FeedbackDraftShot {
+    let id = UUID()
+    var captured: CapturedWindow
+    var region: CaptureRegion?
+    var label = ""
+
+    init(captured: CapturedWindow) {
+        self.captured = captured
+    }
 }
 
 struct FeedbackMetadata: Codable {
@@ -121,11 +186,27 @@ struct FeedbackMetadata: Codable {
         var recording: String?
     }
 
+    struct CaptureAssetsMetadata: Codable {
+        var annotatedScreenshot: String
+        var originalScreenshot: String
+    }
+
+    struct CaptureItemMetadata: Codable {
+        var index: Int
+        var label: String?
+        var app: AppMetadata
+        var browser: BrowserPageContext?
+        var capture: CaptureMetadata
+        var assets: CaptureAssetsMetadata
+    }
+
     var id: String
+    var schemaVersion: Int
     var createdAt: String
     var app: AppMetadata
     var browser: BrowserPageContext?
     var project: ProjectMetadata
     var capture: CaptureMetadata
     var assets: AssetsMetadata
+    var captures: [CaptureItemMetadata]
 }

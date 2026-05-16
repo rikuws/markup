@@ -8,7 +8,9 @@ final class StatusBarController: NSObject {
     private let settingsStore: SettingsStore
     private let appUpdater: AppUpdater
     private let feedbackInbox = FeedbackInbox()
+    private let isAddingToCurrentFeedback: () -> Bool
     private let capture: () -> Void
+    private let cancelCurrentFeedback: () -> Void
     private let openSettings: () -> Void
     private let openFeedbackFolder: () -> Void
     private let quit: () -> Void
@@ -18,14 +20,18 @@ final class StatusBarController: NSObject {
     init(
         settingsStore: SettingsStore,
         appUpdater: AppUpdater,
+        isAddingToCurrentFeedback: @escaping () -> Bool,
         capture: @escaping () -> Void,
+        cancelCurrentFeedback: @escaping () -> Void,
         openSettings: @escaping () -> Void,
         openFeedbackFolder: @escaping () -> Void,
         quit: @escaping () -> Void
     ) {
         self.settingsStore = settingsStore
         self.appUpdater = appUpdater
+        self.isAddingToCurrentFeedback = isAddingToCurrentFeedback
         self.capture = capture
+        self.cancelCurrentFeedback = cancelCurrentFeedback
         self.openSettings = openSettings
         self.openFeedbackFolder = openFeedbackFolder
         self.quit = quit
@@ -81,13 +87,29 @@ final class StatusBarController: NSObject {
         return menu
     }
 
+    func refreshCaptureItemState() {
+        applyHotKey(settingsStore.settings.hotKey)
+        if let menu = item.menu {
+            rebuildMenu(menu)
+        }
+    }
+
     private func rebuildMenu(_ menu: NSMenu) {
         menu.removeAllItems()
 
+        captureItem.title = captureTitle()
         captureItem.target = self
         captureItem.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: nil)
         captureItem.isEnabled = true
         menu.addItem(captureItem)
+
+        if isAddingToCurrentFeedback() {
+            let cancelDraftItem = NSMenuItem(title: "Cancel Current Feedback", action: #selector(cancelCurrentFeedbackSelected), keyEquivalent: "")
+            cancelDraftItem.target = self
+            cancelDraftItem.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: nil)
+            cancelDraftItem.isEnabled = true
+            menu.addItem(cancelDraftItem)
+        }
 
         let openItem = NSMenuItem(title: "Open Current Feedback Folder", action: #selector(openFeedbackFolderSelected), keyEquivalent: "")
         openItem.target = self
@@ -233,13 +255,25 @@ final class StatusBarController: NSObject {
 
     private func applyHotKey(_ hotKey: HotKeySettings) {
         let normalized = hotKey.normalized
+        let title = captureTitle()
+        captureItem.title = title
         captureItem.keyEquivalent = normalized.key.lowercased()
         captureItem.keyEquivalentModifierMask = normalized.menuModifierFlags
-        item.button?.toolTip = "Markup - Capture Feedback \(normalized.displayString)"
+        item.button?.toolTip = "Markup - \(title) \(normalized.displayString)"
+    }
+
+    private func captureTitle() -> String {
+        isAddingToCurrentFeedback()
+            ? "Add Shot to Current Feedback"
+            : "Capture Feedback"
     }
 
     @objc private func captureSelected() {
         capture()
+    }
+
+    @objc private func cancelCurrentFeedbackSelected() {
+        cancelCurrentFeedback()
     }
 
     @objc private func settingsSelected() {

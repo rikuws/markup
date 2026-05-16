@@ -4,22 +4,24 @@ final class AnnotationWindowController: NSWindowController {
     private let viewController: AnnotationViewController
 
     init(
-        captured: CapturedWindow,
-        route: AppRoute?,
-        recordingURL: URL?,
-        onSave: @escaping (String, CaptureRegion, NSImage, NSImage, URL?) -> Void,
+        draft: FeedbackDraft,
+        selectedShotID: UUID?,
+        showsAppendBanner: Bool,
+        onSave: @escaping () -> Void,
         onChangeRoute: @escaping (AppRoute?) -> AppRoute?,
         onCancel: @escaping () -> Void,
-        onRecord: @escaping () -> Void
+        onRecord: @escaping (UUID?) -> Void,
+        onAddShot: @escaping () -> Void
     ) {
         viewController = AnnotationViewController(
-            captured: captured,
-            route: route,
-            recordingURL: recordingURL,
+            draft: draft,
+            selectedShotID: selectedShotID,
+            showsAppendBanner: showsAppendBanner,
             onSave: onSave,
             onChangeRoute: onChangeRoute,
             onCancel: onCancel,
-            onRecord: onRecord
+            onRecord: onRecord,
+            onAddShot: onAddShot
         )
 
         let screenFrame = NSScreen.allScreenFrame
@@ -72,42 +74,63 @@ final class AnnotationOverlayWindow: NSWindow {
     }
 }
 
-final class AnnotationViewController: NSViewController, NSTextViewDelegate {
-    private let captured: CapturedWindow
+final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTextFieldDelegate {
+    private let draft: FeedbackDraft
     private var route: AppRoute?
-    private let recordingURL: URL?
-    private let onSave: (String, CaptureRegion, NSImage, NSImage, URL?) -> Void
+    private let showsAppendBanner: Bool
+    private let onSave: () -> Void
     private let onChangeRoute: (AppRoute?) -> AppRoute?
     private let onCancel: () -> Void
-    private let onRecord: () -> Void
+    private let onRecord: (UUID?) -> Void
+    private let onAddShot: () -> Void
 
     private let canvas: AnnotationCanvasView
     private let projectRouteView = ProjectRouteView()
+    private let headerLabel = NSTextField(labelWithString: "")
+    private let windowTitleLabel = NSTextField(labelWithString: "")
+    private let helperLabel = NSTextField(labelWithString: "")
+    private let appendBadge = BadgeLabel(text: "Adding to previous feedback")
+    private let shotStrip = NSStackView()
+    private let shotCountLabel = NSTextField(labelWithString: "")
+    private let selectedShotLabel = NSTextField(labelWithString: "")
+    private let labelField = NSTextField()
     private let noteTextView = PlaceholderTextView(placeholder: "Describe what should change, what looks wrong, or what the agent should fix.")
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
+    private let addShotButton = NSButton(title: "Add Shot", target: nil, action: nil)
+    private let deleteShotButton = NSButton(title: "Delete Shot", target: nil, action: nil)
+    private let recordButton = NSButton(title: "Record 10s", target: nil, action: nil)
     private let recordingBadge = NSTextField(labelWithString: "")
+    private var selectedShotID: UUID
 
     var initialFirstResponder: NSResponder {
         canvas
     }
 
     init(
-        captured: CapturedWindow,
-        route: AppRoute?,
-        recordingURL: URL?,
-        onSave: @escaping (String, CaptureRegion, NSImage, NSImage, URL?) -> Void,
+        draft: FeedbackDraft,
+        selectedShotID: UUID?,
+        showsAppendBanner: Bool,
+        onSave: @escaping () -> Void,
         onChangeRoute: @escaping (AppRoute?) -> AppRoute?,
         onCancel: @escaping () -> Void,
-        onRecord: @escaping () -> Void
+        onRecord: @escaping (UUID?) -> Void,
+        onAddShot: @escaping () -> Void
     ) {
-        self.captured = captured
-        self.route = route
-        self.recordingURL = recordingURL
+        self.draft = draft
+        self.route = draft.route
+        self.showsAppendBanner = showsAppendBanner
         self.onSave = onSave
         self.onChangeRoute = onChangeRoute
         self.onCancel = onCancel
         self.onRecord = onRecord
-        canvas = AnnotationCanvasView(image: captured.image)
+        self.onAddShot = onAddShot
+
+        let initialShot = selectedShotID
+            .flatMap { id in draft.shots.first(where: { $0.id == id }) }
+            ?? draft.shots.last
+            ?? draft.shots[0]
+        self.selectedShotID = initialShot.id
+        canvas = AnnotationCanvasView(image: initialShot.captured.image)
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -124,8 +147,41 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
     override func viewDidLoad() {
         super.viewDidLoad()
         buildLayout()
+        wireEvents()
+        updateSelectedShotUI()
+        updateSaveState()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(canvas)
+        canvas.setCaptureRegion(selectedShot.region)
+    }
+
+    func textDidChange(_ notification: Notification) {
+        draft.note = noteTextView.string
+        updateSaveState()
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard obj.object as? NSTextField === labelField else { return }
+        selectedShot.label = labelField.stringValue
+        rebuildShotStrip()
+    }
+
+    private var selectedShot: FeedbackDraftShot {
+        draft.shots.first(where: { $0.id == selectedShotID }) ?? draft.shots[0]
+    }
+
+    private var selectedShotIndex: Int {
+        draft.shots.firstIndex(where: { $0.id == selectedShotID }) ?? 0
+    }
+
+    private func wireEvents() {
         canvas.onSelectionChanged = { [weak self] in
             guard let self else { return }
+            self.selectedShot.region = self.canvas.captureRegion
+            self.rebuildShotStrip()
             self.updateSaveState()
         }
         canvas.onSelectionCompleted = { [weak self] in
@@ -135,16 +191,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
             }
         }
         noteTextView.delegate = self
-        updateSaveState()
-    }
-
-    override func viewDidAppear() {
-        super.viewDidAppear()
-        view.window?.makeFirstResponder(canvas)
-    }
-
-    func textDidChange(_ notification: Notification) {
-        updateSaveState()
+        noteTextView.string = draft.note
+        labelField.delegate = self
     }
 
     private func buildLayout() {
@@ -155,33 +203,25 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         container.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container)
 
-        let header = NSTextField(labelWithString: captured.appName)
-        header.font = .systemFont(ofSize: 17, weight: .semibold)
-        header.textColor = .white
-        header.lineBreakMode = .byTruncatingMiddle
+        headerLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        headerLabel.textColor = .white
+        headerLabel.lineBreakMode = .byTruncatingMiddle
 
-        let windowTitle = NSTextField(labelWithString: captured.windowTitle)
-        windowTitle.font = .systemFont(ofSize: 12, weight: .medium)
-        windowTitle.textColor = NSColor.white.withAlphaComponent(0.72)
-        windowTitle.lineBreakMode = .byTruncatingMiddle
+        windowTitleLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        windowTitleLabel.textColor = NSColor.white.withAlphaComponent(0.72)
+        windowTitleLabel.lineBreakMode = .byTruncatingMiddle
 
-        let helperText = recordingURL == nil
-            ? "Drag one box around the issue, then write the instruction for the coding agent."
-            : "Recording attached. Drag one box, add a note, then Save to write the feedback folder."
-        let helper = NSTextField(labelWithString: helperText)
-        helper.font = .systemFont(ofSize: 12)
-        helper.textColor = NSColor.white.withAlphaComponent(0.68)
-        helper.lineBreakMode = .byTruncatingTail
+        helperLabel.font = .systemFont(ofSize: 12)
+        helperLabel.textColor = NSColor.white.withAlphaComponent(0.68)
+        helperLabel.lineBreakMode = .byTruncatingTail
 
-        let titleStack = NSStackView(views: [header, windowTitle, helper])
+        let titleStack = NSStackView(views: [headerLabel, windowTitleLabel, helperLabel])
         titleStack.orientation = .vertical
         titleStack.alignment = .leading
         titleStack.spacing = 3
 
-        recordingBadge.stringValue = recordingURL == nil ? "" : "Recording attached"
         recordingBadge.textColor = .systemGreen
         recordingBadge.font = .systemFont(ofSize: 12, weight: .semibold)
-        recordingBadge.isHidden = recordingURL == nil
 
         let shortcutHints = NSStackView(views: [
             ShortcutHintView(key: "Esc", label: "Cancel"),
@@ -192,20 +232,52 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         shortcutHints.alignment = .centerY
         shortcutHints.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let headerRow = NSStackView(views: [titleStack, NSView(), shortcutHints, recordingBadge])
+        let headerRow = NSStackView(views: [titleStack, NSView(), appendBadge, shortcutHints, recordingBadge])
         headerRow.orientation = .horizontal
         headerRow.spacing = 14
         headerRow.alignment = .centerY
         headerRow.distribution = .fill
 
         projectRouteView.translatesAutoresizingMaskIntoConstraints = false
-        projectRouteView.configure(captured: captured, route: route)
+        projectRouteView.configure(captured: draft.primaryCapture, route: route)
         projectRouteView.onChange = { [weak self] in
             self?.changeRouteSelected()
         }
 
+        shotStrip.orientation = .horizontal
+        shotStrip.alignment = .centerY
+        shotStrip.spacing = 10
+        shotStrip.translatesAutoresizingMaskIntoConstraints = false
+
+        shotCountLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        shotCountLabel.textColor = NSColor.white.withAlphaComponent(0.62)
+        shotCountLabel.alignment = .right
+
+        let shotStripRow = NSStackView(views: [shotStrip, NSView(), shotCountLabel])
+        shotStripRow.orientation = .horizontal
+        shotStripRow.alignment = .centerY
+        shotStripRow.spacing = 12
+
+        selectedShotLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        selectedShotLabel.textColor = NSColor.white.withAlphaComponent(0.92)
+
+        labelField.placeholderString = "Shot label (optional)"
+        labelField.font = .systemFont(ofSize: 13, weight: .regular)
+        labelField.lineBreakMode = .byTruncatingTail
+        labelField.bezelStyle = .roundedBezel
+        labelField.focusRingType = .default
+
+        deleteShotButton.target = self
+        deleteShotButton.action = #selector(deleteShotSelected)
+        deleteShotButton.bezelStyle = .rounded
+
+        let shotControls = NSStackView(views: [selectedShotLabel, labelField, deleteShotButton])
+        shotControls.orientation = .horizontal
+        shotControls.alignment = .centerY
+        shotControls.spacing = 10
+
         canvas.translatesAutoresizingMaskIntoConstraints = false
-        canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 380).isActive = true
+        canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
 
         let noteSurface = AnnotationSurfaceView()
         noteSurface.translatesAutoresizingMaskIntoConstraints = false
@@ -224,8 +296,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         noteScroll.scrollerStyle = .overlay
         noteScroll.contentView.drawsBackground = false
         noteScroll.documentView = noteTextView
-        noteTextView.frame = NSRect(x: 0, y: 0, width: 640, height: 160)
-        noteTextView.minSize = NSSize(width: 0, height: 160)
+        noteTextView.frame = NSRect(x: 0, y: 0, width: 640, height: 150)
+        noteTextView.minSize = NSSize(width: 0, height: 150)
         noteTextView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         noteTextView.isVerticallyResizable = true
         noteTextView.isHorizontallyResizable = false
@@ -242,7 +314,6 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         noteTextView.updateWrappingWidth()
         noteTextView.isRichText = false
         noteTextView.allowsUndo = true
-        noteTextView.string = ""
         noteSurface.installContentView(noteScroll)
 
         let noteLabel = NSTextField(labelWithString: "Note")
@@ -250,10 +321,15 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         noteLabel.textColor = NSColor.white.withAlphaComponent(0.92)
         noteLabel.font = .systemFont(ofSize: 12, weight: .semibold)
 
-        let recordButton = NSButton(title: "Record 10s", target: self, action: #selector(recordSelected))
+        recordButton.target = self
+        recordButton.action = #selector(recordSelected)
         recordButton.bezelStyle = .rounded
         recordButton.controlSize = .large
-        recordButton.isEnabled = recordingURL == nil
+
+        addShotButton.target = self
+        addShotButton.action = #selector(addShotSelected)
+        addShotButton.bezelStyle = .rounded
+        addShotButton.controlSize = .large
 
         let cancelButton = NSButton(title: "Cancel", target: self, action: #selector(cancelSelected))
         cancelButton.bezelStyle = .rounded
@@ -267,7 +343,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         saveButton.contentTintColor = .controlAccentColor
         saveButton.keyEquivalent = "\r"
 
-        let actions = NSStackView(views: [recordButton, NSView(), cancelButton, saveButton])
+        let actions = NSStackView(views: [recordButton, addShotButton, NSView(), cancelButton, saveButton])
         actions.orientation = .horizontal
         actions.spacing = 12
         actions.alignment = .centerY
@@ -280,6 +356,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
 
         container.addArrangedSubview(headerRow)
         container.addArrangedSubview(projectRouteView)
+        container.addArrangedSubview(shotStripRow)
+        container.addArrangedSubview(shotControls)
         container.addArrangedSubview(canvas)
         container.addArrangedSubview(noteSection)
         container.addArrangedSubview(actions)
@@ -290,35 +368,90 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
             container.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
             projectRouteView.heightAnchor.constraint(greaterThanOrEqualToConstant: 58),
+            shotStripRow.heightAnchor.constraint(equalToConstant: 76),
+            labelField.heightAnchor.constraint(equalToConstant: 28),
+            labelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
             noteLabel.topAnchor.constraint(equalTo: noteSection.topAnchor),
             noteLabel.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor, constant: 2),
             noteSurface.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor),
             noteSurface.trailingAnchor.constraint(equalTo: noteSection.trailingAnchor),
             noteSurface.topAnchor.constraint(equalTo: noteLabel.bottomAnchor, constant: 8),
             noteSurface.bottomAnchor.constraint(equalTo: noteSection.bottomAnchor),
-            noteSurface.heightAnchor.constraint(equalToConstant: 166)
+            noteSurface.heightAnchor.constraint(equalToConstant: 156)
         ])
     }
 
+    private func updateSelectedShotUI() {
+        let shot = selectedShot
+        let index = selectedShotIndex + 1
+        headerLabel.stringValue = shot.captured.appName
+        windowTitleLabel.stringValue = shot.captured.windowTitle
+        helperLabel.stringValue = helperText(for: index)
+        appendBadge.isHidden = !(showsAppendBanner || draft.shots.count > 1)
+        recordingBadge.stringValue = draft.recordingURL == nil ? "" : "Recording attached"
+        recordingBadge.isHidden = draft.recordingURL == nil
+        shotCountLabel.stringValue = "\(draft.shots.count)/\(FeedbackDraft.maximumShots) shots"
+        selectedShotLabel.stringValue = "Shot \(index)"
+        labelField.stringValue = shot.label
+        deleteShotButton.isEnabled = selectedShotIndex > 0
+        recordButton.isEnabled = draft.recordingURL == nil
+        addShotButton.isEnabled = draft.canAddShot
+        canvas.configure(image: shot.captured.image, region: shot.region)
+        rebuildShotStrip()
+    }
+
+    private func helperText(for index: Int) -> String {
+        if draft.shots.count > 1 {
+            return "Shot \(index) of \(draft.shots.count). Select the region for this view; the note applies to all shots."
+        }
+
+        return draft.recordingURL == nil
+            ? "Drag one box around the issue, then write the instruction for the coding agent."
+            : "Recording attached. Drag one box, add a note, then Save to write the feedback folder."
+    }
+
+    private func rebuildShotStrip() {
+        for view in shotStrip.arrangedSubviews {
+            shotStrip.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        for (offset, shot) in draft.shots.enumerated() {
+            let thumbnail = ShotThumbnailView(
+                shot: shot,
+                index: offset + 1,
+                isSelected: shot.id == selectedShotID
+            )
+            thumbnail.target = self
+            thumbnail.action = #selector(shotThumbnailSelected(_:))
+            shotStrip.addArrangedSubview(thumbnail)
+            NSLayoutConstraint.activate([
+                thumbnail.widthAnchor.constraint(equalToConstant: 112),
+                thumbnail.heightAnchor.constraint(equalToConstant: 70)
+            ])
+        }
+    }
+
+    @objc private func shotThumbnailSelected(_ sender: ShotThumbnailView) {
+        selectedShotID = sender.shotID
+        updateSelectedShotUI()
+        view.window?.makeFirstResponder(canvas)
+    }
+
     @objc private func saveSelected() {
-        guard let region = canvas.captureRegion else {
+        guard draft.isComplete else {
             NSSound.beep()
+            if draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                view.window?.makeFirstResponder(noteTextView)
+            } else if let missing = draft.shots.first(where: { $0.region == nil }) {
+                selectedShotID = missing.id
+                updateSelectedShotUI()
+                view.window?.makeFirstResponder(canvas)
+            }
             return
         }
 
-        let note = noteTextView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !note.isEmpty else {
-            NSSound.beep()
-            view.window?.makeFirstResponder(noteTextView)
-            return
-        }
-
-        guard let annotated = ScreenshotAnnotator.annotatedImage(source: captured.image, region: region) else {
-            NSSound.beep()
-            return
-        }
-
-        onSave(note, region, annotated, captured.image, recordingURL)
+        onSave()
     }
 
     private func changeRouteSelected() {
@@ -327,7 +460,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
         }
 
         route = updatedRoute
-        projectRouteView.configure(captured: captured, route: updatedRoute)
+        draft.route = updatedRoute
+        projectRouteView.configure(captured: draft.primaryCapture, route: updatedRoute)
     }
 
     @objc private func cancelSelected() {
@@ -340,12 +474,208 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate {
     }
 
     @objc private func recordSelected() {
-        onRecord()
+        onRecord(selectedShotID)
+    }
+
+    @objc private func addShotSelected() {
+        guard draft.canAddShot else {
+            NSSound.beep()
+            return
+        }
+
+        onAddShot()
+    }
+
+    @objc private func deleteShotSelected() {
+        let index = selectedShotIndex
+        guard index > 0 else {
+            NSSound.beep()
+            return
+        }
+
+        draft.deleteShot(id: selectedShotID)
+        let nextIndex = min(index, draft.shots.count - 1)
+        selectedShotID = draft.shots[nextIndex].id
+        updateSelectedShotUI()
+        updateSaveState()
     }
 
     private func updateSaveState() {
-        let note = noteTextView.string.trimmingCharacters(in: .whitespacesAndNewlines)
-        saveButton.isEnabled = canvas.captureRegion != nil && !note.isEmpty
+        saveButton.isEnabled = draft.isComplete
+        addShotButton.isEnabled = draft.canAddShot
+        deleteShotButton.isEnabled = selectedShotIndex > 0
+    }
+}
+
+final class BadgeLabel: NSTextField {
+    init(text: String) {
+        super.init(frame: .zero)
+        stringValue = text
+        isEditable = false
+        isBordered = false
+        drawsBackground = false
+        font = .systemFont(ofSize: 11, weight: .semibold)
+        textColor = .white
+        alignment = .center
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.78).cgColor
+        layer?.cornerRadius = 10
+        layer?.masksToBounds = true
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let size = super.intrinsicContentSize
+        return NSSize(width: size.width + 20, height: 22)
+    }
+}
+
+final class ShotThumbnailView: NSControl {
+    let shotID: UUID
+    private let image: NSImage
+    private let index: Int
+    private let isSelectedShot: Bool
+    private let hasRegion: Bool
+    private let label: String
+
+    init(shot: FeedbackDraftShot, index: Int, isSelected: Bool) {
+        shotID = shot.id
+        image = shot.captured.image
+        self.index = index
+        isSelectedShot = isSelected
+        hasRegion = shot.region != nil
+        label = shot.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        toolTip = label.isEmpty ? "Shot \(index)" : "Shot \(index): \(label)"
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        sendAction(action, to: target)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let outerRect = bounds.insetBy(dx: 1, dy: 1)
+        let outer = NSBezierPath(roundedRect: outerRect, xRadius: 9, yRadius: 9)
+        NSColor(calibratedWhite: 0.05, alpha: 0.96).setFill()
+        outer.fill()
+
+        let imageRect = outerRect.insetBy(dx: 5, dy: 5)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: imageRect, xRadius: 6, yRadius: 6).addClip()
+        image.draw(in: aspectFillRect(for: image, inside: imageRect))
+        NSColor.black.withAlphaComponent(0.12).setFill()
+        imageRect.fill(using: .sourceAtop)
+        NSGraphicsContext.restoreGraphicsState()
+
+        drawIndexBadge(in: imageRect)
+
+        if !label.isEmpty {
+            drawLabel(in: imageRect)
+        } else if !hasRegion {
+            drawNeedsRegion(in: imageRect)
+        }
+
+        let strokeColor = isSelectedShot
+            ? NSColor.controlAccentColor.withAlphaComponent(0.95)
+            : NSColor.white.withAlphaComponent(0.22)
+        strokeColor.setStroke()
+        outer.lineWidth = isSelectedShot ? 2 : 1
+        outer.stroke()
+    }
+
+    private func drawIndexBadge(in rect: NSRect) {
+        let text = "\(index)"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold),
+            .foregroundColor: NSColor.white
+        ]
+        let size = (text as NSString).size(withAttributes: attributes)
+        let badgeRect = NSRect(
+            x: rect.minX + 6,
+            y: rect.maxY - size.height - 12,
+            width: max(22, size.width + 12),
+            height: size.height + 7
+        )
+        let badge = NSBezierPath(roundedRect: badgeRect, xRadius: 9, yRadius: 9)
+        NSColor.black.withAlphaComponent(0.72).setFill()
+        badge.fill()
+        (text as NSString).draw(
+            in: NSRect(
+                x: badgeRect.minX + (badgeRect.width - size.width) / 2,
+                y: badgeRect.minY + 3,
+                width: size.width,
+                height: size.height
+            ),
+            withAttributes: attributes
+        )
+    }
+
+    private func drawLabel(in rect: NSRect) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.white
+        ]
+        let text = label as NSString
+        let labelRect = NSRect(
+            x: rect.minX + 6,
+            y: rect.minY + 6,
+            width: rect.width - 12,
+            height: 14
+        )
+        NSColor.black.withAlphaComponent(0.62).setFill()
+        NSBezierPath(roundedRect: labelRect.insetBy(dx: -4, dy: -2), xRadius: 6, yRadius: 6).fill()
+        text.draw(in: labelRect, withAttributes: attributes)
+    }
+
+    private func drawNeedsRegion(in rect: NSRect) {
+        let text = "Needs region"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: NSColor.white
+        ]
+        let size = (text as NSString).size(withAttributes: attributes)
+        let labelRect = NSRect(
+            x: rect.maxX - size.width - 12,
+            y: rect.minY + 6,
+            width: size.width + 8,
+            height: size.height + 5
+        )
+        NSColor.systemYellow.withAlphaComponent(0.92).setFill()
+        NSBezierPath(roundedRect: labelRect, xRadius: 7, yRadius: 7).fill()
+        (text as NSString).draw(
+            in: NSRect(
+                x: labelRect.minX + 4,
+                y: labelRect.minY + 3,
+                width: size.width,
+                height: size.height
+            ),
+            withAttributes: attributes
+        )
+    }
+
+    private func aspectFillRect(for image: NSImage, inside rect: NSRect) -> NSRect {
+        guard image.size.width > 0, image.size.height > 0 else { return rect }
+
+        let scale = max(rect.width / image.size.width, rect.height / image.size.height)
+        let size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+        return NSRect(
+            x: rect.midX - size.width / 2,
+            y: rect.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
     }
 }
 

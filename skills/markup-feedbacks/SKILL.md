@@ -30,7 +30,7 @@ python3 ~/.codex/skills/markup-feedbacks/scripts/list_feedback.py --root "$PWD" 
 ## Workflow
 
 1. Run `list_feedback.py` from the target repo. Treat the JSON output as the work queue, already sorted oldest first.
-2. For each selected bundle, read `instruction.md` and `metadata.json`. Inspect `screenshot.png`, `screenshot-original.png`, and `recording.mov` when present and useful.
+2. For each selected bundle, read `instruction.md` and `metadata.json`. Inspect `screenshot.png`, `screenshot-original.png`, any `captures` entries returned by the list script, and `recording.mov` when present and useful.
 3. Confirm the bundle belongs to the repo you are editing. Prefer the current working tree when the bundle path is under it; otherwise compare `metadata.project.root` with the requested repo.
 4. Implement the requested fix in the codebase using the repo's normal patterns.
 5. Verify the fix with the smallest meaningful command or visual check. Broaden verification when the change touches shared behavior or UI rendering.

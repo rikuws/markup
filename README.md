@@ -30,7 +30,7 @@ swift package resolve
 ## Features
 
 - Capture the active window from the menu bar or with `Cmd+Shift+M`.
-- Mark one clear region and add a typed or dictated instruction.
+- Mark one clear region, optionally add more annotated screenshots to the same feedback, and add a typed or dictated instruction.
 - Attach an optional 10-second screen recording.
 - Route feedback per app, with browser captures grouped by detected page or project.
 - Save plain-file `.markup/feedback` bundles that people and coding agents can inspect.
@@ -40,10 +40,11 @@ swift package resolve
 1. Launch Markup.
 2. Press `Cmd+Shift+M` in the app or browser page you are reviewing.
 3. Draw a box around the issue.
-4. Add a short note.
-5. Save the feedback bundle to the configured project route.
+4. Add more screenshots when one issue needs several views or states.
+5. Add a short note.
+6. Save the feedback bundle to the configured project route.
 
-Each saved capture includes the note, metadata, marked screenshot, original screenshot, and optional recording.
+Each saved feedback includes the note, metadata, marked screenshot, original screenshot, any extra marked screenshots, and optional recording.
 
 ## Coding Agent Skill
 

@@ -15,12 +15,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let status = StatusBarController(
             settingsStore: settingsStore,
             appUpdater: appUpdater,
+            isAddingToCurrentFeedback: { coordinator.isAddingToCurrentFeedback },
             capture: { coordinator.captureFeedback() },
+            cancelCurrentFeedback: { coordinator.cancelCurrentFeedback() },
             openSettings: { [weak self] in self?.showSettings() },
             openFeedbackFolder: { [weak self] in self?.openCurrentFeedbackFolder() },
             quit: { NSApp.terminate(nil) }
         )
         statusBarController = status
+        coordinator.onAppendModeChanged = { [weak status] _ in
+            status?.refreshCaptureItemState()
+        }
 
         let hotKeys = HotKeyManager(settingsStore: settingsStore) {
             coordinator.captureFeedback()

@@ -27,8 +27,8 @@ final class AnnotationCanvasView: NSView {
         )
     }
 
-    private let image: NSImage
-    private let cgImage: CGImage
+    private var image: NSImage
+    private var cgImage: CGImage
     private var dragStart: NSPoint?
     private let imageCornerRadius: CGFloat = 12
     private var selectionRect: NSRect? {
@@ -50,6 +50,43 @@ final class AnnotationCanvasView: NSView {
 
     override var acceptsFirstResponder: Bool {
         true
+    }
+
+    func configure(image: NSImage, region: CaptureRegion?) {
+        self.image = image
+        cgImage = image.bestCGImage()
+        setCaptureRegion(region)
+    }
+
+    func setCaptureRegion(_ region: CaptureRegion?) {
+        guard let region else {
+            selectionRect = nil
+            needsDisplay = true
+            return
+        }
+
+        let imageRect = aspectFitRect()
+        guard imageRect.width > 0, imageRect.height > 0 else {
+            selectionRect = nil
+            needsDisplay = true
+            return
+        }
+
+        let pixelWidth = CGFloat(cgImage.width)
+        let pixelHeight = CGFloat(cgImage.height)
+        let x = imageRect.minX + (CGFloat(region.x) / pixelWidth) * imageRect.width
+        let y = imageRect.maxY - ((CGFloat(region.y + region.height) / pixelHeight) * imageRect.height)
+        let width = (CGFloat(region.width) / pixelWidth) * imageRect.width
+        let height = (CGFloat(region.height) / pixelHeight) * imageRect.height
+        selectionRect = NSRect(x: x, y: y, width: width, height: height)
+        needsDisplay = true
+    }
+
+    override func layout() {
+        super.layout()
+        if let region = captureRegion {
+            setCaptureRegion(region)
+        }
     }
 
     override func draw(_ dirtyRect: NSRect) {

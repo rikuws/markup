@@ -87,6 +87,10 @@ def bundle_record(path: Path, instruction: Path, metadata_path: Path, feedback_r
         "recording": asset_path(path, assets.get("recording"), "recording.mov") if assets.get("recording") else None,
     }
 
+    captures = capture_records(path, metadata)
+    if captures:
+        record["captures"] = captures
+
     browser = metadata.get("browser") if isinstance(metadata, dict) else None
     if browser:
         record["browser"] = browser
@@ -128,8 +132,46 @@ def parse_datetime(value):
 
 def asset_path(bundle: Path, configured_name, fallback_name):
     name = configured_name or fallback_name
+    if not name:
+        return None
     candidate = bundle / name
     return str(candidate.resolve()) if candidate.exists() else None
+
+
+def capture_records(bundle: Path, metadata):
+    if not isinstance(metadata, dict):
+        return []
+
+    captures = metadata.get("captures")
+    if not isinstance(captures, list):
+        return []
+
+    records = []
+    for item in captures:
+        if not isinstance(item, dict):
+            continue
+
+        assets = item.get("assets", {})
+        capture = item.get("capture", {})
+        record = {
+            "index": item.get("index"),
+            "label": item.get("label"),
+            "annotatedScreenshot": asset_path(bundle, assets.get("annotatedScreenshot"), None),
+            "originalScreenshot": asset_path(bundle, assets.get("originalScreenshot"), None),
+            "region": capture.get("region") if isinstance(capture, dict) else None,
+        }
+
+        app = item.get("app")
+        if app:
+            record["app"] = app
+
+        browser = item.get("browser")
+        if browser:
+            record["browser"] = browser
+
+        records.append(record)
+
+    return records
 
 
 def main():
