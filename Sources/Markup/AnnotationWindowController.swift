@@ -414,7 +414,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             headerRow.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             headerRow.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             headerRow.topAnchor.constraint(equalTo: container.topAnchor),
-            headerRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            headerRow.heightAnchor.constraint(equalToConstant: 44),
             titleStack.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor),
             titleStack.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
             titleStack.topAnchor.constraint(greaterThanOrEqualTo: headerRow.topAnchor),
