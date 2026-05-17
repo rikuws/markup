@@ -66,6 +66,7 @@ struct CapturedWindow {
     var windowTitle: String
     var processIdentifier: pid_t
     var windowID: CGWindowID?
+    var screenFrame: NSRect
     var browserPage: BrowserPageContext?
 
     var routeKey: String {

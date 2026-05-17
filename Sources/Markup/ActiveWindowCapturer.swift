@@ -37,6 +37,7 @@ final class ActiveWindowCapturer {
             windowTitle: title,
             processIdentifier: pid,
             windowID: cgWindow.id,
+            screenFrame: screenFrame(for: cgWindow.bounds),
             browserPage: routeTarget.browserPage
         )
     }
@@ -75,6 +76,37 @@ final class ActiveWindowCapturer {
         }
 
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
+    private func screenFrame(for windowBounds: CGRect) -> NSRect {
+        let fallback = NSScreen.main?.frame
+            ?? NSScreen.screens.first?.frame
+            ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let screens = NSScreen.screens.compactMap { screen -> (screen: NSScreen, bounds: CGRect)? in
+            guard let displayID = screen.displayID else { return nil }
+            return (screen, CGDisplayBounds(displayID))
+        }
+        guard !screens.isEmpty else { return fallback }
+
+        let center = CGPoint(x: windowBounds.midX, y: windowBounds.midY)
+        if let match = screens.first(where: { $0.bounds.contains(center) }) {
+            return match.screen.frame
+        }
+
+        let ranked = screens.map { candidate in
+            (screen: candidate.screen, area: intersectionArea(windowBounds, candidate.bounds))
+        }
+        guard let match = ranked.max(by: { $0.area < $1.area }), match.area > 0 else {
+            return fallback
+        }
+
+        return match.screen.frame
+    }
+
+    private func intersectionArea(_ lhs: CGRect, _ rhs: CGRect) -> CGFloat {
+        let intersection = lhs.intersection(rhs)
+        guard !intersection.isNull, !intersection.isEmpty else { return 0 }
+        return intersection.width * intersection.height
     }
 
     private func frontmostCGWindow(
@@ -220,4 +252,14 @@ private struct WindowCandidate {
     var id: CGWindowID
     var title: String?
     var bounds: CGRect
+}
+
+private extension NSScreen {
+    var displayID: CGDirectDisplayID? {
+        guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return nil
+        }
+
+        return CGDirectDisplayID(number.uint32Value)
+    }
 }

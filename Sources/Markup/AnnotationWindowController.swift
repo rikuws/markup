@@ -2,6 +2,7 @@ import AppKit
 
 final class AnnotationWindowController: NSWindowController {
     private let viewController: AnnotationViewController
+    private let overlayFrame: NSRect
 
     init(
         draft: FeedbackDraft,
@@ -13,6 +14,7 @@ final class AnnotationWindowController: NSWindowController {
         onRecord: @escaping (UUID?) -> Void,
         onAddShot: @escaping () -> Void
     ) {
+        overlayFrame = Self.overlayFrame(for: draft, selectedShotID: selectedShotID)
         viewController = AnnotationViewController(
             draft: draft,
             selectedShotID: selectedShotID,
@@ -24,9 +26,8 @@ final class AnnotationWindowController: NSWindowController {
             onAddShot: onAddShot
         )
 
-        let screenFrame = NSScreen.allScreenFrame
         let window = AnnotationOverlayWindow(
-            contentRect: screenFrame,
+            contentRect: overlayFrame,
             styleMask: [.borderless],
             backing: .buffered,
             defer: false
@@ -50,10 +51,18 @@ final class AnnotationWindowController: NSWindowController {
     func show() {
         NSLog("Markup: showing annotation editor")
         NSApp.activate(ignoringOtherApps: true)
-        window?.setFrame(NSScreen.allScreenFrame, display: true)
+        window?.setFrame(overlayFrame, display: true)
         window?.orderFrontRegardless()
         window?.makeKey()
         window?.makeFirstResponder(viewController.initialFirstResponder)
+    }
+
+    private static func overlayFrame(for draft: FeedbackDraft, selectedShotID: UUID?) -> NSRect {
+        let selectedShot = selectedShotID
+            .flatMap { id in draft.shots.first(where: { $0.id == id }) }
+            ?? draft.shots.last
+            ?? draft.shots[0]
+        return selectedShot.captured.screenFrame
     }
 }
 
@@ -197,11 +206,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
     }
 
     private func buildLayout() {
-        let container = NSStackView()
-        container.orientation = .vertical
-        container.alignment = .width
-        container.distribution = .fill
-        container.spacing = 12
+        let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container)
 
@@ -278,6 +283,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         shotCountLabel.alignment = .right
 
         let shotStripRow = NSStackView(views: [shotStrip, NSView(), shotCountLabel])
+        shotStripRow.translatesAutoresizingMaskIntoConstraints = false
         shotStripRow.orientation = .horizontal
         shotStripRow.alignment = .centerY
         shotStripRow.spacing = 12
@@ -298,6 +304,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         deleteShotButton.bezelStyle = .rounded
 
         let shotControls = NSStackView(views: [selectedShotLabel, labelField, deleteShotButton])
+        shotControls.translatesAutoresizingMaskIntoConstraints = false
         shotControls.orientation = .horizontal
         shotControls.alignment = .centerY
         shotControls.spacing = 10
@@ -307,7 +314,9 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         canvas.translatesAutoresizingMaskIntoConstraints = false
         canvas.setContentHuggingPriority(.defaultLow, for: .vertical)
         canvas.setContentCompressionResistancePriority(.required, for: .vertical)
-        canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
+        let canvasMinimumHeight = canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 280)
+        canvasMinimumHeight.priority = .defaultHigh
+        canvasMinimumHeight.isActive = true
 
         let noteSurface = AnnotationSurfaceView()
         noteSurface.translatesAutoresizingMaskIntoConstraints = false
@@ -374,6 +383,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         saveButton.keyEquivalent = "\r"
 
         let actions = NSStackView(views: [recordButton, addShotButton, NSView(), cancelButton, saveButton])
+        actions.translatesAutoresizingMaskIntoConstraints = false
         actions.orientation = .horizontal
         actions.spacing = 12
         actions.alignment = .centerY
@@ -388,19 +398,22 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         noteSection.addSubview(noteLabel)
         noteSection.addSubview(noteSurface)
 
-        container.addArrangedSubview(headerRow)
-        container.addArrangedSubview(projectRouteView)
-        container.addArrangedSubview(shotStripRow)
-        container.addArrangedSubview(shotControls)
-        container.addArrangedSubview(canvas)
-        container.addArrangedSubview(noteSection)
-        container.addArrangedSubview(actions)
+        container.addSubview(headerRow)
+        container.addSubview(projectRouteView)
+        container.addSubview(shotStripRow)
+        container.addSubview(shotControls)
+        container.addSubview(canvas)
+        container.addSubview(noteSection)
+        container.addSubview(actions)
 
         NSLayoutConstraint.activate([
             container.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 28),
             container.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -28),
-            container.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
-            container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            container.topAnchor.constraint(equalTo: view.topAnchor, constant: 28),
+            container.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -24),
+            headerRow.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            headerRow.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            headerRow.topAnchor.constraint(equalTo: container.topAnchor),
             headerRow.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
             titleStack.leadingAnchor.constraint(equalTo: headerRow.leadingAnchor),
             titleStack.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
@@ -412,17 +425,36 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             rightControls.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor),
             rightControls.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
             rightControls.leadingAnchor.constraint(greaterThanOrEqualTo: headerRow.centerXAnchor, constant: 14),
+            projectRouteView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            projectRouteView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            projectRouteView.topAnchor.constraint(equalTo: headerRow.bottomAnchor, constant: 12),
             projectRouteView.heightAnchor.constraint(equalToConstant: 68),
+            shotStripRow.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            shotStripRow.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            shotStripRow.topAnchor.constraint(equalTo: projectRouteView.bottomAnchor, constant: 12),
             shotStripRow.heightAnchor.constraint(equalToConstant: 76),
+            shotControls.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            shotControls.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            shotControls.topAnchor.constraint(equalTo: shotStripRow.bottomAnchor, constant: 12),
             labelField.heightAnchor.constraint(equalToConstant: 28),
             labelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
+            canvas.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            canvas.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            canvas.topAnchor.constraint(equalTo: shotControls.bottomAnchor, constant: 12),
+            canvas.bottomAnchor.constraint(equalTo: noteSection.topAnchor, constant: -12),
+            noteSection.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            noteSection.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             noteLabel.topAnchor.constraint(equalTo: noteSection.topAnchor),
             noteLabel.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor, constant: 2),
             noteSurface.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor),
             noteSurface.trailingAnchor.constraint(equalTo: noteSection.trailingAnchor),
             noteSurface.topAnchor.constraint(equalTo: noteLabel.bottomAnchor, constant: 8),
             noteSurface.bottomAnchor.constraint(equalTo: noteSection.bottomAnchor),
-            noteSurface.heightAnchor.constraint(equalToConstant: 156)
+            noteSurface.heightAnchor.constraint(equalToConstant: 156),
+            noteSection.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -12),
+            actions.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            actions.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            actions.bottomAnchor.constraint(equalTo: container.bottomAnchor)
         ])
     }
 
@@ -1160,16 +1192,5 @@ final class KeycapView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
-    }
-}
-
-private extension NSScreen {
-    static var allScreenFrame: NSRect {
-        let frames = screens.map(\.frame)
-        guard let first = frames.first else {
-            return NSRect(x: 0, y: 0, width: 1280, height: 800)
-        }
-
-        return frames.dropFirst().reduce(first) { $0.union($1) }
     }
 }
