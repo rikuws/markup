@@ -200,6 +200,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         let container = NSStackView()
         container.orientation = .vertical
         container.alignment = .width
+        container.distribution = .fill
         container.spacing = 12
         container.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(container)
@@ -248,6 +249,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
 
         let headerRow = NSView()
         headerRow.translatesAutoresizingMaskIntoConstraints = false
+        headerRow.setContentHuggingPriority(.required, for: .vertical)
+        headerRow.setContentCompressionResistancePriority(.required, for: .vertical)
         headerRow.addSubview(titleStack)
         headerRow.addSubview(appendBadge)
         headerRow.addSubview(rightControls)
@@ -258,6 +261,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         ]
 
         projectRouteView.translatesAutoresizingMaskIntoConstraints = false
+        projectRouteView.setContentHuggingPriority(.required, for: .vertical)
+        projectRouteView.setContentCompressionResistancePriority(.required, for: .vertical)
         projectRouteView.configure(captured: draft.primaryCapture, route: route)
         projectRouteView.onChange = { [weak self] in
             self?.changeRouteSelected()
@@ -276,6 +281,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         shotStripRow.orientation = .horizontal
         shotStripRow.alignment = .centerY
         shotStripRow.spacing = 12
+        shotStripRow.setContentHuggingPriority(.required, for: .vertical)
+        shotStripRow.setContentCompressionResistancePriority(.required, for: .vertical)
 
         selectedShotLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         selectedShotLabel.textColor = NSColor.white.withAlphaComponent(0.92)
@@ -294,8 +301,12 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         shotControls.orientation = .horizontal
         shotControls.alignment = .centerY
         shotControls.spacing = 10
+        shotControls.setContentHuggingPriority(.required, for: .vertical)
+        shotControls.setContentCompressionResistancePriority(.required, for: .vertical)
 
         canvas.translatesAutoresizingMaskIntoConstraints = false
+        canvas.setContentHuggingPriority(.defaultLow, for: .vertical)
+        canvas.setContentCompressionResistancePriority(.required, for: .vertical)
         canvas.heightAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
 
         let noteSurface = AnnotationSurfaceView()
@@ -367,9 +378,13 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         actions.spacing = 12
         actions.alignment = .centerY
         actions.distribution = .fill
+        actions.setContentHuggingPriority(.required, for: .vertical)
+        actions.setContentCompressionResistancePriority(.required, for: .vertical)
 
         let noteSection = NSView()
         noteSection.translatesAutoresizingMaskIntoConstraints = false
+        noteSection.setContentHuggingPriority(.required, for: .vertical)
+        noteSection.setContentCompressionResistancePriority(.required, for: .vertical)
         noteSection.addSubview(noteLabel)
         noteSection.addSubview(noteSurface)
 
@@ -397,7 +412,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             rightControls.trailingAnchor.constraint(equalTo: headerRow.trailingAnchor),
             rightControls.centerYAnchor.constraint(equalTo: headerRow.centerYAnchor),
             rightControls.leadingAnchor.constraint(greaterThanOrEqualTo: headerRow.centerXAnchor, constant: 14),
-            projectRouteView.heightAnchor.constraint(greaterThanOrEqualToConstant: 58),
+            projectRouteView.heightAnchor.constraint(equalToConstant: 68),
             shotStripRow.heightAnchor.constraint(equalToConstant: 76),
             labelField.heightAnchor.constraint(equalToConstant: 28),
             labelField.widthAnchor.constraint(greaterThanOrEqualToConstant: 240),
