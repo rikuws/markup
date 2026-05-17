@@ -125,9 +125,13 @@ final class FeedbackDraft {
         min(shots.count + 1, Self.maximumShots)
     }
 
+    var requiresRegions: Bool {
+        recordingURL == nil
+    }
+
     var isComplete: Bool {
         !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && shots.allSatisfy { $0.region != nil }
+            && (!requiresRegions || shots.allSatisfy { $0.region != nil })
     }
 
     @discardableResult
@@ -177,7 +181,7 @@ struct FeedbackMetadata: Codable {
     struct CaptureMetadata: Codable {
         var type: String
         var screenshotSize: SizeMetadata
-        var region: CaptureRegion
+        var region: CaptureRegion?
     }
 
     struct AssetsMetadata: Codable {

@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsStore: settingsStore,
             appUpdater: appUpdater,
             isAddingToCurrentFeedback: { coordinator.isAddingToCurrentFeedback },
+            isRecording: { coordinator.isRecording },
             capture: { coordinator.captureFeedback() },
             cancelCurrentFeedback: { coordinator.cancelCurrentFeedback() },
             openSettings: { [weak self] in self?.showSettings() },
@@ -24,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         statusBarController = status
         coordinator.onAppendModeChanged = { [weak status] _ in
+            status?.refreshCaptureItemState()
+        }
+        coordinator.onRecordingStateChanged = { [weak status] _ in
             status?.refreshCaptureItemState()
         }
 

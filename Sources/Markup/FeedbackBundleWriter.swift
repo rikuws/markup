@@ -26,17 +26,24 @@ final class FeedbackBundleWriter {
         var captures: [FeedbackMetadata.CaptureItemMetadata] = []
         for (offset, shot) in draft.shots.enumerated() {
             let index = offset + 1
-            guard let region = shot.region else {
+            if draft.requiresRegions, shot.region == nil {
                 throw MarkupError("Shot \(index) needs a highlighted region.")
             }
 
-            guard let annotatedImage = ScreenshotAnnotator.annotatedImage(source: shot.captured.image, region: region) else {
-                throw MarkupError("Could not annotate shot \(index).")
+            let region = shot.region
+            let screenshotImage: NSImage
+            if let region {
+                guard let annotatedImage = ScreenshotAnnotator.annotatedImage(source: shot.captured.image, region: region) else {
+                    throw MarkupError("Could not annotate shot \(index).")
+                }
+                screenshotImage = annotatedImage
+            } else {
+                screenshotImage = shot.captured.image
             }
 
             let annotatedName = FeedbackAssetNames.annotatedScreenshot(for: index)
             let originalName = FeedbackAssetNames.originalScreenshot(for: index)
-            try annotatedImage.writePNG(to: directory.appendingPathComponent(annotatedName))
+            try screenshotImage.writePNG(to: directory.appendingPathComponent(annotatedName))
             try shot.captured.image.writePNG(to: directory.appendingPathComponent(originalName))
 
             let image = shot.captured.image.bestCGImage()
@@ -80,7 +87,7 @@ final class FeedbackBundleWriter {
 
         let metadata = FeedbackMetadata(
             id: id,
-            schemaVersion: 2,
+            schemaVersion: 3,
             createdAt: isoFormatter.string(from: now),
             app: primaryCapture.app,
             browser: primaryCapture.browser,
@@ -132,9 +139,18 @@ final class FeedbackBundleWriter {
         hasRecording: Bool
     ) -> String {
         let captured = draft.primaryCapture
-        let screenshotIntro = metadata.captures.count == 1
-            ? "Improve the UI/UX/code issue shown in `\(FeedbackAssetNames.annotatedScreenshot)`."
-            : "Improve the UI/UX/code issue shown across the screenshots in this bundle."
+        let hasHighlightedRegion = metadata.captures.contains { $0.capture.region != nil }
+        let screenshotIntro = screenshotIntroMarkdown(
+            captureCount: metadata.captures.count,
+            hasRecording: hasRecording
+        )
+        let regionGuidance = regionGuidanceMarkdown(
+            hasRecording: hasRecording,
+            hasHighlightedRegion: hasHighlightedRegion
+        )
+        let doneWhenRegionLine = hasHighlightedRegion
+            ? "- The highlighted UI regions no longer exhibit the problem."
+            : "- The behavior shown in the recording and screenshots no longer exhibits the problem."
 
         return """
         # Visual Feedback: \(captured.windowTitle)
@@ -147,7 +163,7 @@ final class FeedbackBundleWriter {
         Screenshots:
         \(screenshotsMarkdown(metadata.captures))
 
-        The highlighted regions are stored as x/y/width/height values in `\(FeedbackAssetNames.metadata)` under `captures[n].capture.region`. `capture` and `assets` also describe Shot 1 for compatibility.
+        \(regionGuidance) `capture` and `assets` also describe Shot 1 for compatibility.
 
         Context:
         - Captured app: \(captured.appName)
@@ -159,8 +175,35 @@ final class FeedbackBundleWriter {
 
         Done when:
         - The issue described in the note is addressed.
-        - The highlighted UI regions no longer exhibit the problem.
+        \(doneWhenRegionLine)
         """
+    }
+
+    private func screenshotIntroMarkdown(
+        captureCount: Int,
+        hasRecording: Bool
+    ) -> String {
+        if hasRecording {
+            return captureCount == 1
+                ? "Improve the UI/UX/code issue shown in `\(FeedbackAssetNames.annotatedScreenshot)` and `\(FeedbackAssetNames.recording)`."
+                : "Improve the UI/UX/code issue shown across the screenshots and `\(FeedbackAssetNames.recording)` in this bundle."
+        }
+
+        return captureCount == 1
+            ? "Improve the UI/UX/code issue shown in `\(FeedbackAssetNames.annotatedScreenshot)`."
+            : "Improve the UI/UX/code issue shown across the screenshots in this bundle."
+    }
+
+    private func regionGuidanceMarkdown(hasRecording: Bool, hasHighlightedRegion: Bool) -> String {
+        if hasHighlightedRegion {
+            return "Highlighted regions are stored as x/y/width/height values in `\(FeedbackAssetNames.metadata)` under `captures[n].capture.region`."
+        }
+
+        if hasRecording {
+            return "No highlighted region was selected; use the recording and screenshots as the feedback target."
+        }
+
+        return "No highlighted region was selected."
     }
 
     private func screenshotsMarkdown(_ captures: [FeedbackMetadata.CaptureItemMetadata]) -> String {
@@ -169,7 +212,11 @@ final class FeedbackBundleWriter {
             if let label = capture.label {
                 line += " - \(label)"
             }
-            line += " (region: `captures[\(capture.index - 1)].capture.region`)"
+            if capture.capture.region != nil {
+                line += " (region: `captures[\(capture.index - 1)].capture.region`)"
+            } else {
+                line += " (no marked region)"
+            }
             return line
         }
         .joined(separator: "\n")

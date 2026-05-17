@@ -430,18 +430,28 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         deleteShotButton.isEnabled = selectedShotIndex > 0
         recordButton.isEnabled = draft.recordingURL == nil
         addShotButton.isEnabled = draft.canAddShot
-        canvas.configure(image: shot.captured.image, region: shot.region)
+        canvas.configure(
+            image: shot.captured.image,
+            region: shot.region,
+            isSelectionOptional: !draft.requiresRegions
+        )
         rebuildShotStrip()
     }
 
     private func helperText(for index: Int) -> String {
+        if draft.recordingURL != nil {
+            if draft.shots.count > 1 {
+                return "Recording attached. Region boxes are optional; the note applies to all shots."
+            }
+
+            return "Recording attached. Add a note, optionally drag a box, then Save."
+        }
+
         if draft.shots.count > 1 {
             return "Shot \(index) of \(draft.shots.count). Select the region for this view; the note applies to all shots."
         }
 
-        return draft.recordingURL == nil
-            ? "Drag one box around the issue, then write the instruction for the coding agent."
-            : "Recording attached. Drag one box, add a note, then Save to write the feedback folder."
+        return "Drag one box around the issue, then write the instruction for the coding agent."
     }
 
     private func rebuildShotStrip() {
@@ -454,7 +464,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             let thumbnail = ShotThumbnailView(
                 shot: shot,
                 index: offset + 1,
-                isSelected: shot.id == selectedShotID
+                isSelected: shot.id == selectedShotID,
+                requiresRegion: draft.requiresRegions
             )
             thumbnail.target = self
             thumbnail.action = #selector(shotThumbnailSelected(_:))
@@ -477,7 +488,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             NSSound.beep()
             if draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 view.window?.makeFirstResponder(noteTextView)
-            } else if let missing = draft.shots.first(where: { $0.region == nil }) {
+            } else if draft.requiresRegions,
+                      let missing = draft.shots.first(where: { $0.region == nil }) {
                 selectedShotID = missing.id
                 updateSelectedShotUI()
                 view.window?.makeFirstResponder(canvas)
@@ -586,14 +598,16 @@ final class ShotThumbnailView: NSControl {
     private let index: Int
     private let isSelectedShot: Bool
     private let hasRegion: Bool
+    private let requiresRegion: Bool
     private let label: String
 
-    init(shot: FeedbackDraftShot, index: Int, isSelected: Bool) {
+    init(shot: FeedbackDraftShot, index: Int, isSelected: Bool, requiresRegion: Bool) {
         shotID = shot.id
         image = shot.captured.image
         self.index = index
         isSelectedShot = isSelected
         hasRegion = shot.region != nil
+        self.requiresRegion = requiresRegion
         label = shot.label.trimmingCharacters(in: .whitespacesAndNewlines)
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
@@ -629,7 +643,7 @@ final class ShotThumbnailView: NSControl {
 
         if !label.isEmpty {
             drawLabel(in: imageRect)
-        } else if !hasRegion {
+        } else if requiresRegion && !hasRegion {
             drawNeedsRegion(in: imageRect)
         }
 

@@ -5,13 +5,18 @@ import ScreenCaptureKit
 final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
     private var session: AVCaptureSession?
     private var output: AVCaptureMovieFileOutput?
-    private var screenCaptureKitSession: AnyObject?
+    private var screenCaptureKitSession: RecordingSession?
     private var completion: ((Result<URL, Error>) -> Void)?
     private var onStarted: (() -> Void)?
     private var destinationURL: URL?
     private var stopWorkItem: DispatchWorkItem?
     private var startTimeoutWorkItem: DispatchWorkItem?
     private var didComplete = false
+    private var isStopping = false
+
+    var isRecording: Bool {
+        session != nil || screenCaptureKitSession != nil
+    }
 
     func record(
         duration: TimeInterval = 10,
@@ -43,6 +48,29 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         }
 
         recordWithAVCapture(duration: duration, onStarted: onStarted, completion: completion)
+    }
+
+    func stop() {
+        guard isRecording else { return }
+
+        if let screenCaptureKitSession {
+            screenCaptureKitSession.stop()
+            return
+        }
+
+        stopWorkItem?.cancel()
+        stopWorkItem = nil
+
+        guard let output else {
+            finish(.failure(MarkupError("Recording stopped before it produced a clip.")))
+            return
+        }
+
+        guard !isStopping else { return }
+        isStopping = true
+        if output.isRecording {
+            output.stopRecording()
+        }
     }
 
     private func recordWithAVCapture(
@@ -79,6 +107,7 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         self.onStarted = onStarted
         destinationURL = destination
         didComplete = false
+        isStopping = false
 
         NSLog("Markup: starting screen recording to \(destination.path)")
 
@@ -120,6 +149,9 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         NSLog("Markup: screen recording started")
         startTimeoutWorkItem?.cancel()
         onStarted?()
+        if isStopping, output.isRecording {
+            output.stopRecording()
+        }
     }
 
     func fileOutput(
@@ -162,6 +194,7 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
         output = nil
         destinationURL = nil
         onStarted = nil
+        isStopping = false
 
         let completion = self.completion
         self.completion = nil
@@ -169,8 +202,12 @@ final class ScreenRecorder: NSObject, AVCaptureFileOutputRecordingDelegate {
     }
 }
 
+private protocol RecordingSession: AnyObject {
+    func stop()
+}
+
 @available(macOS 15.0, *)
-private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
+private final class ScreenCaptureKitRecorder: NSObject, RecordingSession, SCRecordingOutputDelegate, SCStreamDelegate {
     private let duration: TimeInterval
     private let destination: URL
     private let onStarted: (() -> Void)?
@@ -184,6 +221,7 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
     private var finishTimeoutWorkItem: DispatchWorkItem?
     private var didStart = false
     private var didComplete = false
+    private var isStopping = false
 
     init(
         duration: TimeInterval,
@@ -205,6 +243,18 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
             } catch {
                 finish(.failure(error))
             }
+        }
+    }
+
+    func stop() {
+        guard !didComplete else { return }
+        stopWorkItem?.cancel()
+        stopWorkItem = nil
+        guard !isStopping else { return }
+        isStopping = true
+
+        if didStart {
+            stopRecording()
         }
     }
 
@@ -281,6 +331,11 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
             self.onStarted?()
         }
 
+        if isStopping {
+            stopRecording()
+            return
+        }
+
         let stopWorkItem = DispatchWorkItem { [weak self] in
             self?.stopRecording()
         }
@@ -354,6 +409,7 @@ private final class ScreenCaptureKitRecorder: NSObject, SCRecordingOutputDelegat
         let stream = self.stream
         self.stream = nil
         recordingOutput = nil
+        isStopping = false
 
         if stream != nil {
             stream?.stopCapture { error in

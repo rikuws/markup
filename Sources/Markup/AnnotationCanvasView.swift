@@ -27,6 +27,7 @@ final class AnnotationCanvasView: NSView {
         )
     }
 
+    private var isSelectionOptional = false
     private var image: NSImage
     private var cgImage: CGImage
     private var dragStart: NSPoint?
@@ -52,8 +53,9 @@ final class AnnotationCanvasView: NSView {
         true
     }
 
-    func configure(image: NSImage, region: CaptureRegion?) {
+    func configure(image: NSImage, region: CaptureRegion?, isSelectionOptional: Bool = false) {
         self.image = image
+        self.isSelectionOptional = isSelectionOptional
         cgImage = image.bestCGImage()
         setCaptureRegion(region)
     }
@@ -295,7 +297,7 @@ final class AnnotationCanvasView: NSView {
     }
 
     private func drawHint(in imageRect: NSRect) {
-        let hint = "Select the issue area"
+        let hint = isSelectionOptional ? "Optional: select issue area" : "Select the issue area"
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
             .foregroundColor: NSColor.white

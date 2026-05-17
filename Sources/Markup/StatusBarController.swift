@@ -9,6 +9,7 @@ final class StatusBarController: NSObject {
     private let appUpdater: AppUpdater
     private let feedbackInbox = FeedbackInbox()
     private let isAddingToCurrentFeedback: () -> Bool
+    private let isRecording: () -> Bool
     private let capture: () -> Void
     private let cancelCurrentFeedback: () -> Void
     private let openSettings: () -> Void
@@ -21,6 +22,7 @@ final class StatusBarController: NSObject {
         settingsStore: SettingsStore,
         appUpdater: AppUpdater,
         isAddingToCurrentFeedback: @escaping () -> Bool,
+        isRecording: @escaping () -> Bool,
         capture: @escaping () -> Void,
         cancelCurrentFeedback: @escaping () -> Void,
         openSettings: @escaping () -> Void,
@@ -30,6 +32,7 @@ final class StatusBarController: NSObject {
         self.settingsStore = settingsStore
         self.appUpdater = appUpdater
         self.isAddingToCurrentFeedback = isAddingToCurrentFeedback
+        self.isRecording = isRecording
         self.capture = capture
         self.cancelCurrentFeedback = cancelCurrentFeedback
         self.openSettings = openSettings
@@ -99,7 +102,7 @@ final class StatusBarController: NSObject {
 
         captureItem.title = captureTitle()
         captureItem.target = self
-        captureItem.image = NSImage(systemSymbolName: "viewfinder", accessibilityDescription: nil)
+        captureItem.image = captureImage()
         captureItem.isEnabled = true
         menu.addItem(captureItem)
 
@@ -257,15 +260,27 @@ final class StatusBarController: NSObject {
         let normalized = hotKey.normalized
         let title = captureTitle()
         captureItem.title = title
+        captureItem.image = captureImage()
         captureItem.keyEquivalent = normalized.key.lowercased()
         captureItem.keyEquivalentModifierMask = normalized.menuModifierFlags
         item.button?.toolTip = "Markup - \(title) \(normalized.displayString)"
     }
 
     private func captureTitle() -> String {
-        isAddingToCurrentFeedback()
+        if isRecording() {
+            return "Stop Recording"
+        }
+
+        return isAddingToCurrentFeedback()
             ? "Add Shot to Current Feedback"
             : "Capture Feedback"
+    }
+
+    private func captureImage() -> NSImage? {
+        NSImage(
+            systemSymbolName: isRecording() ? "stop.circle" : "viewfinder",
+            accessibilityDescription: nil
+        )
     }
 
     @objc private func captureSelected() {

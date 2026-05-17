@@ -2,9 +2,14 @@ import AppKit
 
 final class CaptureCoordinator {
     var onAppendModeChanged: ((Bool) -> Void)?
+    var onRecordingStateChanged: ((Bool) -> Void)?
 
     var isAddingToCurrentFeedback: Bool {
         isArmedForAdditionalShot
+    }
+
+    var isRecording: Bool {
+        recorder.isRecording || recordingProgressController != nil
     }
 
     private let settingsStore: SettingsStore
@@ -15,6 +20,7 @@ final class CaptureCoordinator {
     private var recordingProgressController: RecordingProgressWindowController?
     private var appendHUDController: AppendCaptureHUDController?
     private var draft: FeedbackDraft?
+    private var shouldStopRecordingWhenStarted = false
     private var isArmedForAdditionalShot = false {
         didSet {
             guard oldValue != isArmedForAdditionalShot else { return }
@@ -28,6 +34,11 @@ final class CaptureCoordinator {
     }
 
     func captureFeedback(recordingURL: URL? = nil) {
+        if recordingURL == nil, isRecording {
+            stopActiveRecording()
+            return
+        }
+
         if let recordingURL, let draft {
             draft.recordingURL = recordingURL
             showAnnotation(for: draft, selectedShotID: nil, showsAppendBanner: draft.shots.count > 1)
@@ -196,9 +207,14 @@ final class CaptureCoordinator {
         NSRunningApplication(processIdentifier: selectedCapture.processIdentifier)?
             .activate(options: [.activateIgnoringOtherApps])
 
-        let progressController = RecordingProgressWindowController(duration: recordingDuration)
+        let hotKeyDisplay = settingsStore.settings.hotKey.normalized.displayString
+        let progressController = RecordingProgressWindowController(
+            duration: recordingDuration,
+            stopShortcutDisplay: hotKeyDisplay
+        )
         recordingProgressController = progressController
         progressController.show()
+        onRecordingStateChanged?(true)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak draft] in
             guard let self, let draft else { return }
@@ -208,13 +224,20 @@ final class CaptureCoordinator {
                 onStarted: {
                     DispatchQueue.main.async {
                         progressController.markStarted()
+                        if self.shouldStopRecordingWhenStarted {
+                            self.shouldStopRecordingWhenStarted = false
+                            progressController.markStopping()
+                            self.recorder.stop()
+                        }
                     }
                 },
                 completion: { [weak self, weak draft] result in
                     DispatchQueue.main.async {
                         guard let self, let draft else { return }
+                        self.shouldStopRecordingWhenStarted = false
                         self.recordingProgressController?.close()
                         self.recordingProgressController = nil
+                        self.onRecordingStateChanged?(false)
 
                         switch result {
                         case .success(let url):
@@ -231,6 +254,16 @@ final class CaptureCoordinator {
                     }
                 }
             )
+        }
+    }
+
+    private func stopActiveRecording() {
+        guard isRecording else { return }
+
+        shouldStopRecordingWhenStarted = true
+        recordingProgressController?.markStopping()
+        if recorder.isRecording {
+            recorder.stop()
         }
     }
 

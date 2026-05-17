@@ -2,16 +2,18 @@ import AppKit
 
 final class RecordingProgressWindowController: NSWindowController {
     private let duration: TimeInterval
+    private let stopShortcutDisplay: String
     private let titleLabel = NSTextField(labelWithString: "Starting recording...")
-    private let detailLabel = NSTextField(labelWithString: "The editor will reopen when the clip is ready.")
+    private let detailLabel = NSTextField(labelWithString: "")
     private let progressIndicator = NSProgressIndicator()
     private var timer: Timer?
     private var startedAt: Date?
 
-    init(duration: TimeInterval) {
+    init(duration: TimeInterval, stopShortcutDisplay: String) {
         self.duration = duration
+        self.stopShortcutDisplay = stopShortcutDisplay
 
-        let content = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 112))
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 128))
         content.wantsLayer = true
         content.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.86).cgColor
         content.layer?.cornerRadius = 12
@@ -30,6 +32,8 @@ final class RecordingProgressWindowController: NSWindowController {
         detailLabel.translatesAutoresizingMaskIntoConstraints = false
         detailLabel.font = .systemFont(ofSize: 12)
         detailLabel.textColor = NSColor.white.withAlphaComponent(0.72)
+        detailLabel.stringValue = "Press \(stopShortcutDisplay) again to stop early."
+        detailLabel.lineBreakMode = .byWordWrapping
 
         progressIndicator.translatesAutoresizingMaskIntoConstraints = false
         progressIndicator.isIndeterminate = false
@@ -100,6 +104,17 @@ final class RecordingProgressWindowController: NSWindowController {
         }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)
+    }
+
+    func markStopping() {
+        timer?.invalidate()
+        timer = nil
+
+        if let startedAt {
+            progressIndicator.doubleValue = min(duration, Date().timeIntervalSince(startedAt))
+        }
+        titleLabel.stringValue = "Stopping recording..."
+        detailLabel.stringValue = "The editor will reopen when the clip is ready."
     }
 
     override func close() {
