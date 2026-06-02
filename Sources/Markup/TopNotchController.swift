@@ -16,6 +16,7 @@ final class TopNotchController {
     private var contentRevealWorkItem: DispatchWorkItem?
     private var frameCollapseWorkItem: DispatchWorkItem?
     private var currentScreenID: CGDirectDisplayID?
+    private var expandedHoverFrame: NSRect?
 
     init(settingsStore: SettingsStore) {
         self.settingsStore = settingsStore
@@ -116,6 +117,7 @@ final class TopNotchController {
         screenFollowTimer = nil
         model.isExpanded = false
         model.showsExpandedContent = false
+        expandedHoverFrame = nil
         panel?.orderOut(nil)
         panel = nil
     }
@@ -129,7 +131,7 @@ final class TopNotchController {
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            if let panel = self.panel, panel.frame.contains(NSEvent.mouseLocation) {
+            if self.isMouseInsideStableHoverArea() {
                 return
             }
             self.setExpanded(false)
@@ -176,6 +178,7 @@ final class TopNotchController {
             self.model.isExpanded = false
             self.positionPanel(animated: true)
             self.restartRefreshTimer()
+            self.expandedHoverFrame = nil
         }
         frameCollapseWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + TopNotchConstants.contentFadeOutDelay, execute: workItem)
@@ -232,6 +235,9 @@ final class TopNotchController {
         model.displayMode = displayMode
 
         let frame = targetFrame(on: screen, displayMode: displayMode)
+        if model.isExpanded {
+            expandedHoverFrame = targetFrame(on: screen, displayMode: displayMode, isExpanded: true)
+        }
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
@@ -261,7 +267,11 @@ final class TopNotchController {
     }
 
     private func targetFrame(on screen: NSScreen, displayMode: TopNotchDisplayMode) -> NSRect {
-        let size = targetSize(on: screen, displayMode: displayMode)
+        targetFrame(on: screen, displayMode: displayMode, isExpanded: model.isExpanded)
+    }
+
+    private func targetFrame(on screen: NSScreen, displayMode: TopNotchDisplayMode, isExpanded: Bool) -> NSRect {
+        let size = targetSize(on: screen, displayMode: displayMode, isExpanded: isExpanded)
         let screenFrame = screen.frame
 
         return NSRect(
@@ -273,10 +283,14 @@ final class TopNotchController {
     }
 
     private func targetSize(on screen: NSScreen, displayMode: TopNotchDisplayMode) -> NSSize {
+        targetSize(on: screen, displayMode: displayMode, isExpanded: model.isExpanded)
+    }
+
+    private func targetSize(on screen: NSScreen, displayMode: TopNotchDisplayMode, isExpanded: Bool) -> NSSize {
         let screenFrame = screen.frame
         let visibleFrame = screen.visibleFrame
 
-        if !model.isExpanded {
+        if !isExpanded {
             let idleSize = displayMode == .builtInNotch
                 ? TopNotchConstants.builtInIdleSize
                 : TopNotchConstants.externalIdleSize
@@ -307,6 +321,22 @@ final class TopNotchController {
 
     private func displayMode(for screen: NSScreen) -> TopNotchDisplayMode {
         screen.isMarkupBuiltInDisplay ? .builtInNotch : .externalEdge
+    }
+
+    private func isMouseInsideStableHoverArea() -> Bool {
+        let mouseLocation = NSEvent.mouseLocation
+
+        if let expandedHoverFrame,
+           expandedHoverFrame.insetBy(dx: -TopNotchConstants.hoverTolerance, dy: -TopNotchConstants.hoverTolerance).contains(mouseLocation) {
+            return true
+        }
+
+        if let panel,
+           panel.frame.insetBy(dx: -TopNotchConstants.hoverTolerance, dy: -TopNotchConstants.hoverTolerance).contains(mouseLocation) {
+            return true
+        }
+
+        return false
     }
 }
 
@@ -360,6 +390,7 @@ private enum TopNotchConstants {
     static let contentFadeOutDelay: TimeInterval = 0.11
     static let expandDuration: TimeInterval = 0.34
     static let collapseDuration: TimeInterval = 0.24
+    static let hoverTolerance: CGFloat = 14
 }
 
 private struct TopNotchPanelView: View {
