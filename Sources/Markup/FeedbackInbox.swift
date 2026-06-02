@@ -10,10 +10,15 @@ struct FeedbackInboxProject {
 struct FeedbackInboxItem {
     var id: String
     var title: String
+    var note: String
     var createdAt: Date?
     var directoryURL: URL
     var instructionURL: URL
     var screenshotURL: URL?
+
+    var stableID: String {
+        directoryURL.standardizedFileURL.path
+    }
 }
 
 final class FeedbackInbox {
@@ -47,6 +52,17 @@ final class FeedbackInbox {
             .sorted {
                 $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
             }
+    }
+
+    func updateNote(for item: FeedbackInboxItem, note: String) throws {
+        let contents = try String(contentsOf: item.instructionURL, encoding: .utf8)
+        let updatedContents = try replacingUserNote(in: contents, with: note)
+        try updatedContents.write(to: item.instructionURL, atomically: true, encoding: .utf8)
+    }
+
+    func moveToTrash(_ item: FeedbackInboxItem) throws {
+        var trashedURL: NSURL?
+        try fileManager.trashItem(at: item.directoryURL, resultingItemURL: &trashedURL)
     }
 
     private func items(in feedbackDirectoryURL: URL) -> [FeedbackInboxItem] {
@@ -94,7 +110,7 @@ final class FeedbackInbox {
         let createdAt = parseDate(metadata?.createdAt) ?? modificationDate(for: directoryURL)
         let id = metadata?.id.nonEmpty ?? directoryURL.lastPathComponent
         let note = userNote(from: instructionURL)
-        let title = note.nonEmpty
+        let title = singleLineTitle(from: note).nonEmpty
             ?? metadata?.browser?.title.nonEmpty
             ?? metadata?.app?.windowTitle.nonEmpty
             ?? id
@@ -102,6 +118,7 @@ final class FeedbackInbox {
         return FeedbackInboxItem(
             id: id,
             title: title,
+            note: note,
             createdAt: createdAt,
             directoryURL: directoryURL,
             instructionURL: instructionURL,
@@ -152,7 +169,48 @@ final class FeedbackInbox {
             }
         }
 
-        return noteLines.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return noteLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func replacingUserNote(in contents: String, with note: String) throws -> String {
+        var lines = contents.components(separatedBy: "\n")
+        guard let noteIndex = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "User note:" }) else {
+            throw MarkupError("Could not find the feedback note block.")
+        }
+
+        let replacementEnd = userNoteReplacementEnd(in: lines, startingAt: noteIndex + 1)
+        lines.replaceSubrange((noteIndex + 1)..<replacementEnd, with: quotedNoteLines(note))
+        return lines.joined(separator: "\n")
+    }
+
+    private func userNoteReplacementEnd(in lines: [String], startingAt startIndex: Int) -> Int {
+        if let screenshotsIndex = lines[startIndex...].firstIndex(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "Screenshots:" }) {
+            return screenshotsIndex
+        }
+
+        var index = startIndex
+        while index < lines.count {
+            let line = lines[index]
+            if line.hasPrefix(">") || line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                index += 1
+            } else {
+                break
+            }
+        }
+        return index
+    }
+
+    private func quotedNoteLines(_ note: String) -> [String] {
+        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let noteLines = trimmedNote.isEmpty ? [""] : trimmedNote.components(separatedBy: .newlines)
+        return noteLines.map { "> \($0)" } + [""]
+    }
+
+    private func singleLineTitle(from note: String) -> String {
+        note.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private func screenshotURL(for directoryURL: URL, metadata: InboxMetadata?) -> URL? {

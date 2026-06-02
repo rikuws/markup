@@ -15,6 +15,7 @@ final class TopNotchController {
     private var collapseWorkItem: DispatchWorkItem?
     private var contentRevealWorkItem: DispatchWorkItem?
     private var frameCollapseWorkItem: DispatchWorkItem?
+    private var chromeCollapseWorkItem: DispatchWorkItem?
     private var currentScreenID: CGDirectDisplayID?
     private var expandedHoverFrame: NSRect?
 
@@ -24,15 +25,22 @@ final class TopNotchController {
         model.onHoverChanged = { [weak self] isHovering in
             self?.setHovering(isHovering)
         }
-        model.openInstruction = { feedback in
-            NSWorkspace.shared.open(feedback.instructionURL)
-        }
         model.openScreenshot = { feedback in
             guard let screenshotURL = feedback.screenshotURL else { return }
             NSWorkspace.shared.open(screenshotURL)
         }
         model.revealFeedback = { feedback in
             NSWorkspace.shared.activateFileViewerSelecting([feedback.directoryURL])
+        }
+        model.saveFeedbackNote = { [weak self] feedback, note in
+            self?.saveFeedbackNote(feedback, note: note)
+        }
+        model.deleteFeedback = { [weak self] feedback in
+            self?.deleteFeedback(feedback)
+        }
+        model.layoutInvalidated = { [weak self] in
+            guard let self, self.model.isExpanded else { return }
+            self.positionPanel(animated: true)
         }
     }
 
@@ -111,12 +119,16 @@ final class TopNotchController {
         collapseWorkItem?.cancel()
         contentRevealWorkItem?.cancel()
         frameCollapseWorkItem?.cancel()
+        chromeCollapseWorkItem?.cancel()
         refreshTimer?.invalidate()
         screenFollowTimer?.invalidate()
         refreshTimer = nil
         screenFollowTimer = nil
         model.isExpanded = false
         model.showsExpandedContent = false
+        model.showsExpandedChrome = false
+        model.expandedProjectID = nil
+        model.editingFeedbackID = nil
         expandedHoverFrame = nil
         panel?.orderOut(nil)
         panel = nil
@@ -134,6 +146,9 @@ final class TopNotchController {
             if self.isMouseInsideStableHoverArea() {
                 return
             }
+            if self.model.editingFeedbackID != nil {
+                return
+            }
             self.setExpanded(false)
         }
         collapseWorkItem = workItem
@@ -143,9 +158,11 @@ final class TopNotchController {
     private func setExpanded(_ isExpanded: Bool) {
         contentRevealWorkItem?.cancel()
         frameCollapseWorkItem?.cancel()
+        chromeCollapseWorkItem?.cancel()
 
         guard model.isExpanded != isExpanded else {
             if isExpanded {
+                model.showsExpandedChrome = true
                 refreshSnapshot()
                 revealExpandedContent(after: 0.02)
             }
@@ -154,6 +171,7 @@ final class TopNotchController {
 
         if isExpanded {
             refreshSnapshot()
+            model.showsExpandedChrome = true
             model.isExpanded = true
             positionPanel(animated: true)
             revealExpandedContent(after: TopNotchConstants.contentRevealDelay)
@@ -178,14 +196,61 @@ final class TopNotchController {
             self.model.isExpanded = false
             self.positionPanel(animated: true)
             self.restartRefreshTimer()
-            self.expandedHoverFrame = nil
+            self.scheduleChromeCollapse()
         }
         frameCollapseWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + TopNotchConstants.contentFadeOutDelay, execute: workItem)
     }
 
+    private func scheduleChromeCollapse() {
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, !self.model.isExpanded, !self.model.showsExpandedContent else { return }
+            self.model.showsExpandedChrome = false
+            self.model.expandedProjectID = nil
+            self.model.editingFeedbackID = nil
+            self.expandedHoverFrame = nil
+        }
+        chromeCollapseWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + TopNotchConstants.collapseDuration, execute: workItem)
+    }
+
     private func refreshSnapshot() {
-        model.snapshot = TopNotchSnapshot(projects: feedbackInbox.projects(for: settingsStore.settings.routes))
+        let snapshot = TopNotchSnapshot(projects: feedbackInbox.projects(for: settingsStore.settings.routes))
+        model.snapshot = snapshot
+
+        if let expandedProjectID = model.expandedProjectID,
+           !snapshot.projects.contains(where: { $0.id == expandedProjectID }) {
+            model.expandedProjectID = nil
+            model.editingFeedbackID = nil
+        } else if let editingFeedbackID = model.editingFeedbackID,
+                  !snapshot.projects.contains(where: { project in
+                      project.items.contains { $0.stableID == editingFeedbackID }
+                  }) {
+            model.editingFeedbackID = nil
+        }
+    }
+
+    private func saveFeedbackNote(_ feedback: FeedbackInboxItem, note: String) {
+        do {
+            try feedbackInbox.updateNote(for: feedback, note: note)
+            refreshSnapshot()
+            positionPanel(animated: true)
+        } catch {
+            presentError(title: "Could Not Save Feedback", message: error.localizedDescription)
+        }
+    }
+
+    private func deleteFeedback(_ feedback: FeedbackInboxItem) {
+        do {
+            try feedbackInbox.moveToTrash(feedback)
+            if model.editingFeedbackID == feedback.stableID {
+                model.editingFeedbackID = nil
+            }
+            refreshSnapshot()
+            positionPanel(animated: true)
+        } catch {
+            presentError(title: "Could Not Delete Feedback", message: error.localizedDescription)
+        }
     }
 
     private func restartRefreshTimer() {
@@ -212,7 +277,7 @@ final class TopNotchController {
     }
 
     private func followMouseScreenIfNeeded() {
-        guard panel != nil, !model.isExpanded, !model.showsExpandedContent else { return }
+        guard panel != nil, !model.isExpanded, !model.showsExpandedContent, !model.showsExpandedChrome else { return }
         guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main ?? NSScreen.screens.first else {
             return
         }
@@ -306,9 +371,7 @@ final class TopNotchController {
         if !model.snapshot.hasConfiguredProjects || !model.snapshot.hasPendingFeedback {
             contentHeight = 86
         } else {
-            let visibleProjectCount = min(model.snapshot.projects.count, TopNotchConstants.maximumVisibleProjectRows)
-            let overflowHeight: CGFloat = model.snapshot.projects.count > visibleProjectCount ? 28 : 0
-            contentHeight = CGFloat(visibleProjectCount) * 66 + overflowHeight
+            contentHeight = projectListHeight()
         }
 
         let height = min(max(164, baseHeight + contentHeight), max(164, visibleFrame.height - 80))
@@ -338,6 +401,43 @@ final class TopNotchController {
 
         return false
     }
+
+    private func projectListHeight() -> CGFloat {
+        let projects = Array(model.snapshot.sortedProjects.prefix(TopNotchConstants.maximumVisibleProjectRows))
+        guard !projects.isEmpty else { return 0 }
+
+        let rowSpacing = TopNotchConstants.projectRowSpacing
+        var height = CGFloat(projects.count) * TopNotchConstants.projectRowHeight
+            + CGFloat(max(0, projects.count - 1)) * rowSpacing
+
+        if let expandedProjectID = model.expandedProjectID,
+           let project = projects.first(where: { $0.id == expandedProjectID }),
+           !project.items.isEmpty {
+            height += TopNotchConstants.projectFeedbackListTopPadding
+            height += CGFloat(project.items.count) * TopNotchConstants.feedbackRowHeight
+            height += CGFloat(max(0, project.items.count - 1)) * TopNotchConstants.feedbackRowSpacing
+            height += TopNotchConstants.projectFeedbackListBottomPadding
+
+            if let editingFeedbackID = model.editingFeedbackID,
+               project.items.contains(where: { $0.stableID == editingFeedbackID }) {
+                height += TopNotchConstants.feedbackEditorExtraHeight
+            }
+        }
+
+        if model.snapshot.projects.count > projects.count {
+            height += rowSpacing + TopNotchConstants.hiddenProjectsHeight
+        }
+
+        return height
+    }
+
+    private func presentError(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
 }
 
 private final class TopNotchPanel: NSPanel {
@@ -349,12 +449,33 @@ private final class TopNotchModel: ObservableObject {
     @Published var snapshot = TopNotchSnapshot(projects: [])
     @Published var isExpanded = false
     @Published var showsExpandedContent = false
+    @Published var showsExpandedChrome = false
+    @Published var expandedProjectID: String? {
+        didSet {
+            guard oldValue != expandedProjectID else { return }
+            if let editingFeedbackID,
+               let expandedProjectID,
+               let project = snapshot.project(withID: expandedProjectID),
+               !project.items.contains(where: { $0.stableID == editingFeedbackID }) {
+                self.editingFeedbackID = nil
+            }
+            layoutInvalidated?()
+        }
+    }
+    @Published var editingFeedbackID: String? {
+        didSet {
+            guard oldValue != editingFeedbackID else { return }
+            layoutInvalidated?()
+        }
+    }
     @Published var displayMode: TopNotchDisplayMode = .externalEdge
 
     var onHoverChanged: ((Bool) -> Void)?
-    var openInstruction: ((FeedbackInboxItem) -> Void)?
     var openScreenshot: ((FeedbackInboxItem) -> Void)?
     var revealFeedback: ((FeedbackInboxItem) -> Void)?
+    var saveFeedbackNote: ((FeedbackInboxItem, String) -> Void)?
+    var deleteFeedback: ((FeedbackInboxItem) -> Void)?
+    var layoutInvalidated: (() -> Void)?
 }
 
 private enum TopNotchDisplayMode: Equatable {
@@ -364,6 +485,17 @@ private enum TopNotchDisplayMode: Equatable {
 
 private struct TopNotchSnapshot {
     var projects: [FeedbackInboxProject]
+
+    var sortedProjects: [FeedbackInboxProject] {
+        projects.sorted { lhs, rhs in
+            let lhsDate = lhs.items.first?.createdAt ?? .distantPast
+            let rhsDate = rhs.items.first?.createdAt ?? .distantPast
+            if lhsDate != rhsDate {
+                return lhsDate > rhsDate
+            }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
+        }
+    }
 
     var totalCount: Int {
         projects.reduce(0) { $0 + $1.items.count }
@@ -380,12 +512,24 @@ private struct TopNotchSnapshot {
     var hasPendingFeedback: Bool {
         totalCount > 0
     }
+
+    func project(withID id: String) -> FeedbackInboxProject? {
+        projects.first { $0.id == id }
+    }
 }
 
 private enum TopNotchConstants {
     static let builtInIdleSize = NSSize(width: 220, height: 38)
     static let externalIdleSize = NSSize(width: 132, height: 18)
     static let maximumVisibleProjectRows = 6
+    static let projectRowHeight: CGFloat = 58
+    static let projectRowSpacing: CGFloat = 8
+    static let projectFeedbackListTopPadding: CGFloat = 8
+    static let projectFeedbackListBottomPadding: CGFloat = 10
+    static let feedbackRowHeight: CGFloat = 42
+    static let feedbackRowSpacing: CGFloat = 6
+    static let feedbackEditorExtraHeight: CGFloat = 84
+    static let hiddenProjectsHeight: CGFloat = 20
     static let contentRevealDelay: TimeInterval = 0.08
     static let contentFadeOutDelay: TimeInterval = 0.11
     static let expandDuration: TimeInterval = 0.34
@@ -412,31 +556,32 @@ private struct TopNotchPanelView: View {
         .contentShape(Rectangle())
         .onHover { model.onHoverChanged?($0) }
         .animation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08), value: model.isExpanded)
+        .animation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08), value: model.showsExpandedChrome)
         .animation(.easeInOut(duration: 0.16), value: model.showsExpandedContent)
         .animation(.easeInOut(duration: 0.16), value: model.displayMode)
     }
 
     @ViewBuilder
     private var backgroundChrome: some View {
-        if model.isExpanded {
+        if model.showsExpandedChrome {
             TopAttachedRoundedRectangle(cornerRadius: chromeCornerRadius)
                 .fill(.regularMaterial)
                 .overlay(
                     TopAttachedRoundedRectangle(cornerRadius: chromeCornerRadius)
-                        .fill(Color.black.opacity(model.isExpanded ? 0.72 : 0.74))
+                        .fill(Color.black.opacity(0.72))
                 )
                 .overlay(
                     TopAttachedRoundedRectangle(cornerRadius: chromeCornerRadius)
-                        .stroke(Color.white.opacity(model.isExpanded ? 0.20 : 0.13), lineWidth: 0.5)
+                        .stroke(Color.white.opacity(0.20), lineWidth: 0.5)
                 )
-                .shadow(color: Color.black.opacity(model.isExpanded ? 0.34 : 0.26), radius: model.isExpanded ? 24 : 12, y: 7)
+                .shadow(color: Color.black.opacity(0.34), radius: 24, y: 7)
         } else if model.displayMode == .externalEdge {
             Capsule(style: .continuous)
                 .fill(.regularMaterial)
                 .overlay(Capsule(style: .continuous).fill(Color.black.opacity(0.78)))
                 .overlay(Capsule(style: .continuous).stroke(Color.white.opacity(0.18), lineWidth: 0.5))
                 .frame(width: 74, height: 5)
-                .padding(.top, 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .shadow(color: Color.black.opacity(0.28), radius: 6, y: 3)
         } else {
             Color.clear
@@ -444,7 +589,7 @@ private struct TopNotchPanelView: View {
     }
 
     private var chromeCornerRadius: CGFloat {
-        model.isExpanded ? 24 : 18
+        model.showsExpandedChrome ? 24 : 18
     }
 
     private var expandedContent: some View {
@@ -464,19 +609,23 @@ private struct TopNotchPanelView: View {
                     detail: "Saved feedback will appear here."
                 )
             } else {
-                VStack(spacing: 8) {
-                    ForEach(visibleProjects, id: \.id) { project in
-                        TopNotchProjectRow(project: project, model: model)
-                    }
+                ScrollView(.vertical) {
+                    LazyVStack(spacing: TopNotchConstants.projectRowSpacing) {
+                        ForEach(visibleProjects, id: \.id) { project in
+                            TopNotchProjectRow(project: project, model: model)
+                        }
 
-                    if hiddenProjectCount > 0 {
-                        Text("\(hiddenProjectCount) more \(hiddenProjectCount == 1 ? "project" : "projects") in the menu bar inbox")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.white.opacity(0.52))
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.top, 2)
+                        if hiddenProjectCount > 0 {
+                            Text("\(hiddenProjectCount) more \(hiddenProjectCount == 1 ? "project" : "projects") in the menu bar inbox")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Color.white.opacity(0.52))
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.top, 2)
+                        }
                     }
+                    .padding(.vertical, 1)
                 }
+                .frame(maxHeight: .infinity)
             }
         }
         .padding(.horizontal, 18)
@@ -529,14 +678,7 @@ private struct TopNotchPanelView: View {
     }
 
     private var sortedProjects: [FeedbackInboxProject] {
-        model.snapshot.projects.sorted { lhs, rhs in
-            let lhsDate = lhs.items.first?.createdAt ?? .distantPast
-            let rhsDate = rhs.items.first?.createdAt ?? .distantPast
-            if lhsDate != rhsDate {
-                return lhsDate > rhsDate
-            }
-            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
-        }
+        model.snapshot.sortedProjects
     }
 
     private var summaryText: String {
@@ -603,7 +745,50 @@ private struct TopNotchProjectRow: View {
         project.items.first
     }
 
+    private var isExpanded: Bool {
+        model.expandedProjectID == project.id
+    }
+
+    private var isEditingProjectFeedback: Bool {
+        guard let editingFeedbackID = model.editingFeedbackID else { return false }
+        return project.items.contains { $0.stableID == editingFeedbackID }
+    }
+
     var body: some View {
+        VStack(spacing: 0) {
+            summaryRow
+
+            if isExpanded, !project.items.isEmpty {
+                VStack(spacing: TopNotchConstants.feedbackRowSpacing) {
+                    ForEach(project.items, id: \.stableID) { feedback in
+                        TopNotchFeedbackRow(feedback: feedback, model: model)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, TopNotchConstants.projectFeedbackListTopPadding)
+                .padding(.bottom, TopNotchConstants.projectFeedbackListBottomPadding)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(feedback == nil ? 0.045 : 0.075))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(isExpanded ? 0.14 : 0.08), lineWidth: 0.5)
+        )
+        .onHover { isHovering in
+            if isHovering {
+                model.expandedProjectID = project.id
+            } else if !isEditingProjectFeedback {
+                model.expandedProjectID = nil
+            }
+        }
+        .animation(.easeInOut(duration: 0.16), value: isExpanded)
+    }
+
+    private var summaryRow: some View {
         HStack(spacing: 12) {
             Image(systemName: feedback == nil ? "folder" : "text.bubble")
                 .font(.system(size: 15, weight: .semibold))
@@ -644,34 +829,9 @@ private struct TopNotchProjectRow: View {
                     .monospacedDigit()
                     .frame(width: 46, alignment: .trailing)
             }
-
-            HStack(spacing: 5) {
-                TopNotchIconButton(systemName: "doc.text", help: "Open Instruction", isEnabled: feedback != nil) {
-                    guard let feedback else { return }
-                    model.openInstruction?(feedback)
-                }
-
-                TopNotchIconButton(systemName: "photo", help: "Open Screenshot", isEnabled: feedback?.screenshotURL != nil) {
-                    guard let feedback else { return }
-                    model.openScreenshot?(feedback)
-                }
-
-                TopNotchIconButton(systemName: "folder", help: "Reveal in Finder", isEnabled: feedback != nil) {
-                    guard let feedback else { return }
-                    model.revealFeedback?(feedback)
-                }
-            }
         }
         .padding(.horizontal, 12)
-        .frame(height: 58)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(feedback == nil ? 0.045 : 0.075))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
-        )
+        .frame(height: TopNotchConstants.projectRowHeight)
     }
 
     private func displayDate(for date: Date?) -> String {
@@ -688,10 +848,164 @@ private struct TopNotchProjectRow: View {
     }
 }
 
+private struct TopNotchFeedbackRow: View {
+    let feedback: FeedbackInboxItem
+    let model: TopNotchModel
+
+    @State private var draftNote = ""
+
+    private var isEditing: Bool {
+        model.editingFeedbackID == feedback.stableID
+    }
+
+    private var displayNote: String {
+        let note = feedback.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return note.isEmpty ? feedback.title : note
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            summaryRow
+
+            if isEditing {
+                editor
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .onAppear {
+            draftNote = feedback.note
+        }
+        .onChange(of: feedback.stableID) { _ in
+            draftNote = feedback.note
+        }
+        .onChange(of: isEditing) { isEditing in
+            if isEditing {
+                draftNote = feedback.note
+            }
+        }
+    }
+
+    private var summaryRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "text.bubble")
+                .font(.system(size: 11, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Color(nsColor: .controlAccentColor).opacity(0.92))
+                .frame(width: 16)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayNote)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.78))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Text(displayDate(for: feedback.createdAt))
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.42))
+                    .monospacedDigit()
+            }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 4) {
+                TopNotchIconButton(systemName: isEditing ? "xmark" : "pencil", help: isEditing ? "Cancel Editing" : "Edit Feedback", isEnabled: true) {
+                    if isEditing {
+                        draftNote = feedback.note
+                        model.editingFeedbackID = nil
+                    } else {
+                        model.editingFeedbackID = feedback.stableID
+                    }
+                }
+
+                TopNotchIconButton(systemName: "photo", help: "Open Screenshot", isEnabled: feedback.screenshotURL != nil) {
+                    model.openScreenshot?(feedback)
+                }
+
+                TopNotchIconButton(systemName: "folder", help: "Reveal in Finder", isEnabled: true) {
+                    model.revealFeedback?(feedback)
+                }
+
+                TopNotchIconButton(systemName: "trash", help: "Move to Trash", isEnabled: true, tint: .red) {
+                    model.deleteFeedback?(feedback)
+                }
+            }
+        }
+        .frame(height: TopNotchConstants.feedbackRowHeight)
+    }
+
+    private var editor: some View {
+        VStack(alignment: .trailing, spacing: 7) {
+            TextEditor(text: $draftNote)
+                .font(.system(size: 11, weight: .regular))
+                .foregroundColor(.white)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .frame(height: 68)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.black.opacity(0.22))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+                )
+
+            HStack(spacing: 6) {
+                Button {
+                    draftNote = feedback.note
+                    model.editingFeedbackID = nil
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 24, height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.white.opacity(0.66))
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+                .help("Cancel")
+
+                Button {
+                    model.saveFeedbackNote?(feedback, draftNote)
+                    model.editingFeedbackID = nil
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark")
+                        Text("Save")
+                    }
+                    .font(.system(size: 10.5, weight: .bold))
+                    .padding(.horizontal, 9)
+                    .frame(height: 22)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white)
+                .background(Capsule().fill(Color(nsColor: .controlAccentColor).opacity(0.86)))
+                .help("Save Feedback")
+            }
+        }
+        .padding(.bottom, 2)
+    }
+
+    private func displayDate(for date: Date?) -> String {
+        guard let date else { return "Unknown time" }
+
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        if Calendar.current.isDateInToday(date) {
+            formatter.dateFormat = "HH:mm"
+        } else {
+            formatter.setLocalizedDateFormatFromTemplate("MMM d")
+        }
+        return formatter.string(from: date)
+    }
+}
+
 private struct TopNotchIconButton: View {
     let systemName: String
     let help: String
     let isEnabled: Bool
+    var tint: Color?
     let action: () -> Void
 
     var body: some View {
@@ -699,7 +1013,7 @@ private struct TopNotchIconButton: View {
             Image(systemName: systemName)
                 .font(.system(size: 12, weight: .semibold))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.white.opacity(isEnabled ? 0.82 : 0.28))
+                .foregroundStyle(buttonTint.opacity(isEnabled ? 0.82 : 0.28))
                 .frame(width: 26, height: 26)
                 .background(
                     Circle()
@@ -709,6 +1023,10 @@ private struct TopNotchIconButton: View {
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .help(help)
+    }
+
+    private var buttonTint: Color {
+        tint ?? .white
     }
 }
 
