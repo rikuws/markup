@@ -76,6 +76,14 @@ final class SettingsStore: ObservableObject {
         onHotKeyChange?()
     }
 
+    func updateTopNotchEnabled(_ enabled: Bool) {
+        guard settings.topNotchEnabled != enabled else { return }
+        var next = settings
+        next.topNotchEnabled = enabled
+        settings = next
+        save()
+    }
+
     private func save() {
         do {
             try FileManager.default.createDirectory(

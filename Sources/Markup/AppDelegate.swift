@@ -5,6 +5,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appUpdater = AppUpdater()
     private var statusBarController: StatusBarController?
     private var captureCoordinator: CaptureCoordinator?
+    private var topNotchController: TopNotchController?
     private var settingsWindowController: SettingsWindowController?
     private var hotKeyManager: HotKeyManager?
 
@@ -24,6 +25,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             quit: { NSApp.terminate(nil) }
         )
         statusBarController = status
+
+        let topNotch = TopNotchController(settingsStore: settingsStore)
+        topNotch.start()
+        topNotchController = topNotch
+
         coordinator.onAppendModeChanged = { [weak status] _ in
             status?.refreshCaptureItemState()
         }

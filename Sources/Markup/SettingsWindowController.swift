@@ -43,6 +43,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     permissionsSection
                     updatesSection
+                    topNotchSection
                     hotKeySection
                     routesSection
                 }
@@ -173,6 +174,21 @@ struct SettingsView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
+        }
+    }
+
+    private var topNotchSection: some View {
+        SettingsSection(
+            title: "Top Notch",
+            subtitle: "A compact top-edge inbox for pending feedback across projects."
+        ) {
+            Toggle(isOn: Binding(
+                get: { settingsStore.settings.topNotchEnabled },
+                set: { settingsStore.updateTopNotchEnabled($0) }
+            )) {
+                Label("Show the feedback notch on the main display", systemImage: "tray.full")
+            }
+            .toggleStyle(.checkbox)
         }
     }
 

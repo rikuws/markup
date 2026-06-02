@@ -50,6 +50,22 @@ struct AppRoute: Codable, Identifiable, Equatable {
 struct MarkupSettings: Codable, Equatable {
     var hotKey = HotKeySettings()
     var routes: [AppRoute] = []
+    var topNotchEnabled = true
+
+    init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case hotKey
+        case routes
+        case topNotchEnabled
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        hotKey = try container.decodeIfPresent(HotKeySettings.self, forKey: .hotKey) ?? HotKeySettings()
+        routes = try container.decodeIfPresent([AppRoute].self, forKey: .routes) ?? []
+        topNotchEnabled = try container.decodeIfPresent(Bool.self, forKey: .topNotchEnabled) ?? true
+    }
 }
 
 struct CaptureRegion: Codable, Equatable {
