@@ -11,7 +11,11 @@ final class TopNotchController {
     private var settingsCancellable: AnyCancellable?
     private var screenCancellable: AnyCancellable?
     private var refreshTimer: Timer?
+    private var screenFollowTimer: Timer?
     private var collapseWorkItem: DispatchWorkItem?
+    private var contentRevealWorkItem: DispatchWorkItem?
+    private var frameCollapseWorkItem: DispatchWorkItem?
+    private var currentScreenID: CGDirectDisplayID?
 
     init(settingsStore: SettingsStore) {
         self.settingsStore = settingsStore
@@ -33,6 +37,7 @@ final class TopNotchController {
 
     deinit {
         refreshTimer?.invalidate()
+        screenFollowTimer?.invalidate()
     }
 
     func start() {
@@ -64,32 +69,38 @@ final class TopNotchController {
         positionPanel(animated: false)
         panel?.orderFrontRegardless()
         restartRefreshTimer()
+        restartScreenFollowTimer()
     }
 
     private func ensurePanel() {
         guard panel == nil else { return }
 
+        let initialSize = TopNotchConstants.builtInIdleSize
         let contentView = NSHostingView(rootView: TopNotchPanelView(model: model))
-        contentView.frame = NSRect(origin: .zero, size: Self.idleSize)
+        contentView.frame = NSRect(origin: .zero, size: initialSize)
         contentView.autoresizingMask = [.width, .height]
         contentView.wantsLayer = true
         contentView.layer?.backgroundColor = NSColor.clear.cgColor
 
         let panel = TopNotchPanel(
-            contentRect: NSRect(origin: .zero, size: Self.idleSize),
+            contentRect: NSRect(origin: .zero, size: initialSize),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         panel.contentView = contentView
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.level = NSWindow.Level.statusBar
+        panel.collectionBehavior = NSWindow.CollectionBehavior([
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .stationary
+        ])
         panel.isOpaque = false
-        panel.backgroundColor = .clear
+        panel.backgroundColor = NSColor.clear
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
-        panel.animationBehavior = .none
+        panel.animationBehavior = NSWindow.AnimationBehavior.none
         panel.ignoresMouseEvents = false
 
         self.panel = panel
@@ -97,9 +108,14 @@ final class TopNotchController {
 
     private func closePanel() {
         collapseWorkItem?.cancel()
+        contentRevealWorkItem?.cancel()
+        frameCollapseWorkItem?.cancel()
         refreshTimer?.invalidate()
+        screenFollowTimer?.invalidate()
         refreshTimer = nil
+        screenFollowTimer = nil
         model.isExpanded = false
+        model.showsExpandedContent = false
         panel?.orderOut(nil)
         panel = nil
     }
@@ -123,20 +139,46 @@ final class TopNotchController {
     }
 
     private func setExpanded(_ isExpanded: Bool) {
+        contentRevealWorkItem?.cancel()
+        frameCollapseWorkItem?.cancel()
+
         guard model.isExpanded != isExpanded else {
             if isExpanded {
                 refreshSnapshot()
+                revealExpandedContent(after: 0.02)
             }
             return
         }
 
         if isExpanded {
             refreshSnapshot()
+            model.isExpanded = true
+            positionPanel(animated: true)
+            revealExpandedContent(after: TopNotchConstants.contentRevealDelay)
+        } else {
+            model.showsExpandedContent = false
+            scheduleFrameCollapse()
         }
-
-        model.isExpanded = isExpanded
-        positionPanel(animated: true)
         restartRefreshTimer()
+    }
+
+    private func revealExpandedContent(after delay: TimeInterval) {
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.model.showsExpandedContent = true
+        }
+        contentRevealWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func scheduleFrameCollapse() {
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.model.isExpanded = false
+            self.positionPanel(animated: true)
+            self.restartRefreshTimer()
+        }
+        frameCollapseWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + TopNotchConstants.contentFadeOutDelay, execute: workItem)
     }
 
     private func refreshSnapshot() {
@@ -155,23 +197,49 @@ final class TopNotchController {
         refreshTimer = timer
     }
 
-    private func positionPanel(animated: Bool) {
+    private func restartScreenFollowTimer() {
+        screenFollowTimer?.invalidate()
+        guard settingsStore.settings.topNotchEnabled else { return }
+
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.28, repeats: true) { [weak self] _ in
+            self?.followMouseScreenIfNeeded()
+        }
+        timer.tolerance = 0.12
+        screenFollowTimer = timer
+    }
+
+    private func followMouseScreenIfNeeded() {
+        guard panel != nil, !model.isExpanded, !model.showsExpandedContent else { return }
+        guard let screen = screen(containing: NSEvent.mouseLocation) ?? NSScreen.main ?? NSScreen.screens.first else {
+            return
+        }
+
+        let displayID = screen.markupDisplayID
+        let displayMode = displayMode(for: screen)
+        guard currentScreenID != displayID || model.displayMode != displayMode else {
+            return
+        }
+
+        positionPanel(animated: false, preferredScreen: screen)
+    }
+
+    private func positionPanel(animated: Bool, preferredScreen: NSScreen? = nil) {
         guard let panel else { return }
 
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-        let size = targetSize(in: visibleFrame)
-        let frame = NSRect(
-            x: visibleFrame.midX - size.width / 2,
-            y: visibleFrame.maxY - size.height - 5,
-            width: size.width,
-            height: size.height
-        )
+        let screen = preferredScreen ?? targetScreenForPositioning()
+        let displayMode = displayMode(for: screen)
+        currentScreenID = screen.markupDisplayID
+        model.displayMode = displayMode
+
+        let frame = targetFrame(on: screen, displayMode: displayMode)
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = model.isExpanded ? 0.24 : 0.18
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                context.duration = model.isExpanded ? TopNotchConstants.expandDuration : TopNotchConstants.collapseDuration
+                context.timingFunction = model.isExpanded
+                    ? CAMediaTimingFunction(controlPoints: 0.20, 0.84, 0.28, 1.00)
+                    : CAMediaTimingFunction(controlPoints: 0.40, 0.00, 0.20, 1.00)
+                context.allowsImplicitAnimation = true
                 panel.animator().setFrame(frame, display: true)
             }
         } else {
@@ -179,12 +247,46 @@ final class TopNotchController {
         }
     }
 
-    private func targetSize(in visibleFrame: NSRect) -> NSSize {
-        if !model.isExpanded {
-            return NSSize(width: min(Self.idleSize.width, max(96, visibleFrame.width - 32)), height: Self.idleSize.height)
+    private func targetScreenForPositioning() -> NSScreen {
+        if model.isExpanded,
+           let currentScreenID,
+           let screen = NSScreen.screens.first(where: { $0.markupDisplayID == currentScreenID }) {
+            return screen
         }
 
-        let width = min(620, max(280, visibleFrame.width - 32))
+        return screen(containing: NSEvent.mouseLocation) ?? NSScreen.main ?? NSScreen.screens.first
+            ?? {
+                fatalError("Markup requires at least one screen to show the feedback notch.")
+            }()
+    }
+
+    private func targetFrame(on screen: NSScreen, displayMode: TopNotchDisplayMode) -> NSRect {
+        let size = targetSize(on: screen, displayMode: displayMode)
+        let screenFrame = screen.frame
+
+        return NSRect(
+            x: screenFrame.midX - size.width / 2,
+            y: screenFrame.maxY - size.height,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private func targetSize(on screen: NSScreen, displayMode: TopNotchDisplayMode) -> NSSize {
+        let screenFrame = screen.frame
+        let visibleFrame = screen.visibleFrame
+
+        if !model.isExpanded {
+            let idleSize = displayMode == .builtInNotch
+                ? TopNotchConstants.builtInIdleSize
+                : TopNotchConstants.externalIdleSize
+            return NSSize(
+                width: min(idleSize.width, max(64, screenFrame.width - 32)),
+                height: idleSize.height
+            )
+        }
+
+        let width = min(620, max(280, screenFrame.width - 32))
         let baseHeight: CGFloat = 92
         let contentHeight: CGFloat
         if !model.snapshot.hasConfiguredProjects || !model.snapshot.hasPendingFeedback {
@@ -199,7 +301,13 @@ final class TopNotchController {
         return NSSize(width: width, height: height)
     }
 
-    private static let idleSize = NSSize(width: 148, height: 34)
+    private func screen(containing point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { $0.frame.contains(point) }
+    }
+
+    private func displayMode(for screen: NSScreen) -> TopNotchDisplayMode {
+        screen.isMarkupBuiltInDisplay ? .builtInNotch : .externalEdge
+    }
 }
 
 private final class TopNotchPanel: NSPanel {
@@ -210,11 +318,18 @@ private final class TopNotchPanel: NSPanel {
 private final class TopNotchModel: ObservableObject {
     @Published var snapshot = TopNotchSnapshot(projects: [])
     @Published var isExpanded = false
+    @Published var showsExpandedContent = false
+    @Published var displayMode: TopNotchDisplayMode = .externalEdge
 
     var onHoverChanged: ((Bool) -> Void)?
     var openInstruction: ((FeedbackInboxItem) -> Void)?
     var openScreenshot: ((FeedbackInboxItem) -> Void)?
     var revealFeedback: ((FeedbackInboxItem) -> Void)?
+}
+
+private enum TopNotchDisplayMode: Equatable {
+    case builtInNotch
+    case externalEdge
 }
 
 private struct TopNotchSnapshot {
@@ -238,7 +353,13 @@ private struct TopNotchSnapshot {
 }
 
 private enum TopNotchConstants {
+    static let builtInIdleSize = NSSize(width: 220, height: 38)
+    static let externalIdleSize = NSSize(width: 132, height: 18)
     static let maximumVisibleProjectRows = 6
+    static let contentRevealDelay: TimeInterval = 0.08
+    static let contentFadeOutDelay: TimeInterval = 0.11
+    static let expandDuration: TimeInterval = 0.34
+    static let collapseDuration: TimeInterval = 0.24
 }
 
 private struct TopNotchPanelView: View {
@@ -246,50 +367,53 @@ private struct TopNotchPanelView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            RoundedRectangle(cornerRadius: model.isExpanded ? 24 : 17, style: .continuous)
-                .fill(.regularMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: model.isExpanded ? 24 : 17, style: .continuous)
-                        .fill(Color.black.opacity(model.isExpanded ? 0.72 : 0.66))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: model.isExpanded ? 24 : 17, style: .continuous)
-                        .stroke(Color.white.opacity(model.isExpanded ? 0.20 : 0.14), lineWidth: 0.5)
-                )
-                .shadow(color: Color.black.opacity(model.isExpanded ? 0.34 : 0.22), radius: model.isExpanded ? 24 : 14, y: 8)
+            backgroundChrome
 
-            if model.isExpanded {
+            if model.isExpanded || model.showsExpandedContent {
                 expandedContent
-                    .transition(.opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
-            } else {
-                idleContent
-                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .top)))
+                    .opacity(model.showsExpandedContent ? 1 : 0)
+                    .scaleEffect(model.showsExpandedContent ? 1 : 0.985, anchor: .top)
+                    .offset(y: model.showsExpandedContent ? 0 : -5)
             }
+
         }
-        .clipShape(RoundedRectangle(cornerRadius: model.isExpanded ? 24 : 17, style: .continuous))
+        .clipShape(TopAttachedRoundedRectangle(cornerRadius: chromeCornerRadius))
         .contentShape(Rectangle())
         .onHover { model.onHoverChanged?($0) }
-        .animation(.spring(response: 0.26, dampingFraction: 0.84), value: model.isExpanded)
+        .animation(.interactiveSpring(response: 0.38, dampingFraction: 0.88, blendDuration: 0.08), value: model.isExpanded)
+        .animation(.easeInOut(duration: 0.16), value: model.showsExpandedContent)
+        .animation(.easeInOut(duration: 0.16), value: model.displayMode)
     }
 
-    private var idleContent: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "tray.full")
-                .font(.system(size: 13, weight: .semibold))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(Color.white.opacity(0.86))
-
-            Text(compactCount(model.snapshot.totalCount))
-                .font(.system(size: 13, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
-                .monospacedDigit()
-
-            Circle()
-                .fill(model.snapshot.hasPendingFeedback ? Color(nsColor: .controlAccentColor) : Color.white.opacity(0.28))
-                .frame(width: 6, height: 6)
+    @ViewBuilder
+    private var backgroundChrome: some View {
+        if model.isExpanded {
+            TopAttachedRoundedRectangle(cornerRadius: chromeCornerRadius)
+                .fill(.regularMaterial)
+                .overlay(
+                    TopAttachedRoundedRectangle(cornerRadius: chromeCornerRadius)
+                        .fill(Color.black.opacity(model.isExpanded ? 0.72 : 0.74))
+                )
+                .overlay(
+                    TopAttachedRoundedRectangle(cornerRadius: chromeCornerRadius)
+                        .stroke(Color.white.opacity(model.isExpanded ? 0.20 : 0.13), lineWidth: 0.5)
+                )
+                .shadow(color: Color.black.opacity(model.isExpanded ? 0.34 : 0.26), radius: model.isExpanded ? 24 : 12, y: 7)
+        } else if model.displayMode == .externalEdge {
+            Capsule(style: .continuous)
+                .fill(.regularMaterial)
+                .overlay(Capsule(style: .continuous).fill(Color.black.opacity(0.78)))
+                .overlay(Capsule(style: .continuous).stroke(Color.white.opacity(0.18), lineWidth: 0.5))
+                .frame(width: 74, height: 5)
+                .padding(.top, 2)
+                .shadow(color: Color.black.opacity(0.28), radius: 6, y: 3)
+        } else {
+            Color.clear
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 14)
+    }
+
+    private var chromeCornerRadius: CGFloat {
+        model.isExpanded ? 24 : 18
     }
 
     private var expandedContent: some View {
@@ -399,8 +523,44 @@ private struct TopNotchPanelView: View {
         return count == 1 ? "1 item" : "\(count) items"
     }
 
-    private func compactCount(_ count: Int) -> String {
-        count > 99 ? "99+" : "\(count)"
+}
+
+private struct TopAttachedRoundedRectangle: Shape {
+    var cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(cornerRadius, rect.width / 2, rect.height / 2)
+        var path = Path()
+
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - radius))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX - radius, y: rect.maxY),
+            control: CGPoint(x: rect.maxX, y: rect.maxY)
+        )
+        path.addLine(to: CGPoint(x: rect.minX + radius, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX, y: rect.maxY - radius),
+            control: CGPoint(x: rect.minX, y: rect.maxY)
+        )
+        path.closeSubpath()
+
+        return path
+    }
+}
+
+private extension NSScreen {
+    var markupDisplayID: CGDirectDisplayID? {
+        guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return nil
+        }
+        return CGDirectDisplayID(number.uint32Value)
+    }
+
+    var isMarkupBuiltInDisplay: Bool {
+        guard let displayID = markupDisplayID else { return false }
+        return CGDisplayIsBuiltin(displayID) != 0
     }
 }
 
