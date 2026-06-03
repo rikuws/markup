@@ -6,6 +6,7 @@ final class HotKeyManager {
     private let handler: () -> Void
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
+    private var isHandlingHotKey = false
 
     init(settingsStore: SettingsStore, handler: @escaping () -> Void) {
         self.settingsStore = settingsStore
@@ -61,6 +62,10 @@ final class HotKeyManager {
                     .takeUnretainedValue()
 
                 DispatchQueue.main.async {
+                    guard !manager.isHandlingHotKey else { return }
+                    manager.isHandlingHotKey = true
+                    defer { manager.isHandlingHotKey = false }
+
                     manager.handler()
                 }
 

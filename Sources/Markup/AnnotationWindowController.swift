@@ -57,6 +57,11 @@ final class AnnotationWindowController: NSWindowController {
         window?.makeFirstResponder(viewController.initialFirstResponder)
     }
 
+    func refocusIfVisible() {
+        guard window?.isVisible == true else { return }
+        show()
+    }
+
     private static func overlayFrame(for draft: FeedbackDraft, selectedShotID: UUID?) -> NSRect {
         let selectedShot = selectedShotID
             .flatMap { id in draft.shots.first(where: { $0.id == id }) }

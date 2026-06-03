@@ -45,6 +45,11 @@ final class CaptureCoordinator {
             return
         }
 
+        if let overlayController {
+            overlayController.refocusIfVisible()
+            return
+        }
+
         if isArmedForAdditionalShot {
             appendShotToCurrentDraft()
         } else {
@@ -163,7 +168,9 @@ final class CaptureCoordinator {
             }
         )
 
+        let previousOverlayController = overlayController
         overlayController = controller
+        previousOverlayController?.close()
         controller.show()
     }
 
