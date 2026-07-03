@@ -1,0 +1,4 @@
+interface:
+  display_name: "Markup Release"
+  short_description: "Release Markup by pushing semver tags."
+  default_prompt: "Use $markup-release to bump the Markup patch version and push the release tag."
