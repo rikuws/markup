@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**Visual feedback bundles for coding agents.**
+**Visual feedback bundles for installed apps, browser tabs, and local dev servers.**
 
 Markup is a local-first macOS menu bar app for capturing UI feedback, marking the exact problem, and saving an agent-ready work bundle directly inside the project that should be fixed.
 
@@ -10,6 +10,7 @@ Markup is a local-first macOS menu bar app for capturing UI feedback, marking th
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-111111?logo=apple)
 ![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
 ![Local first](https://img.shields.io/badge/local--first-yes-2f855a)
+![Dev server ready](https://img.shields.io/badge/dev--server-ready-6b46c1)
 [![Sparkle updates](https://img.shields.io/badge/updates-Sparkle-0b6bcb)](https://sparkle-project.org/)
 
 [Download DMG](https://github.com/rikuws/markup/releases/latest/download/markup-latest-macos.dmg)
@@ -26,6 +27,8 @@ Screenshots in chat are easy to lose. Bug reports without pixels are easy to mis
 
 That gives coding agents the same context a human reviewer would want: what app was captured, what window or browser page it came from, where the user pointed, what they wrote, and which project route should receive the fix.
 
+**Markup does not require the thing you are reviewing to be installed.** If the UI is running from `npm run dev`, `vite`, `next dev`, `cargo tauri dev`, a localhost browser tab, or any other transient development window, Markup can still capture it and route the feedback by page or project context. That makes it useful while the product is still being built, before there is a packaged app to install.
+
 ```mermaid
 flowchart LR
     A["Capture active window"] --> B["Mark the region"]
@@ -40,6 +43,7 @@ flowchart LR
 | Feature | What it does |
 | --- | --- |
 | Menu bar capture | Capture the active window from the menu bar or with the default `Cmd+Shift+M` hotkey. |
+| Dev-mode friendly | Capture local development builds, localhost browser tabs, and uninstalled app windows. |
 | Region markup | Draw one clear target region per screenshot so the issue is visible at a glance. |
 | Multi-shot feedback | Add up to six screenshots to one feedback item for multi-state or responsive issues. |
 | Short recordings | Attach a focused screen recording when motion, timing, or interaction matters. |
@@ -59,7 +63,7 @@ Markup requires macOS 13 or newer. The first install comes from the DMG or ZIP; 
 
 ## Workflow
 
-1. Focus the app or browser page you are reviewing.
+1. Focus the installed app, uninstalled dev build, or browser page you are reviewing.
 2. Press `Cmd+Shift+M` or choose **Capture Feedback** from the menu bar item.
 3. Draw a box around the issue.
 4. Add a note that says what should change.
