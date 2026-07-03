@@ -11,7 +11,6 @@ Markup is a local-first macOS menu bar app for capturing UI feedback, marking th
 ![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
 ![Local first](https://img.shields.io/badge/local--first-yes-2f855a)
 ![Dev server ready](https://img.shields.io/badge/dev--server-ready-6b46c1)
-[![Sparkle updates](https://img.shields.io/badge/updates-Sparkle-0b6bcb)](https://sparkle-project.org/)
 
 [Download DMG](https://github.com/rikuws/markup/releases/latest/download/markup-latest-macos.dmg)
 &nbsp;&middot;&nbsp;
@@ -29,15 +28,6 @@ That gives coding agents the same context a human reviewer would want: what app 
 
 **Markup does not require the thing you are reviewing to be installed.** If the UI is running from `npm run dev`, `vite`, `next dev`, `cargo tauri dev`, a localhost browser tab, or any other transient development window, Markup can still capture it and route the feedback by page or project context. That makes it useful while the product is still being built, before there is a packaged app to install.
 
-```mermaid
-flowchart LR
-    A["Capture active window"] --> B["Mark the region"]
-    B --> C["Add note, extra shots, or recording"]
-    C --> D["Save .markup/feedback bundle"]
-    D --> E["Agent reads bundle"]
-    E --> F["Fix, verify, remove when done"]
-```
-
 ## Features
 
 | Feature | What it does |
@@ -50,14 +40,13 @@ flowchart LR
 | App and browser routing | Route native apps by app identity and browser pages by local host, repository, Figma file, Google Doc, or host. |
 | Feedback inbox | Review pending feedback by project, open screenshots, edit notes, reveal folders, or move handled items to Trash. |
 | Agent-ready files | Save `instruction.md`, `metadata.json`, screenshots, originals, and optional `recording.mov` in the target repo. |
-| Native updates | Sparkle checks signed GitHub releases and lets users update from inside the app. |
 
 ## Install
 
 1. Download the latest [DMG](https://github.com/rikuws/markup/releases/latest/download/markup-latest-macos.dmg) or [ZIP](https://github.com/rikuws/markup/releases/latest/download/markup-latest-macos.zip).
 2. Move `Markup.app` to `/Applications`.
 3. Launch Markup and grant Screen Recording permission when macOS asks.
-4. Open Settings to configure the hotkey, app routes, updates, and the feedback inbox notch.
+4. Open Settings to configure the hotkey, app routes, and the feedback inbox notch.
 
 Markup requires macOS 13 or newer. The first install comes from the DMG or ZIP; later signed releases can be installed from **Check for Updates**. Accessibility permission is useful for richer browser/page context and can be opened from Settings.
 
