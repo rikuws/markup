@@ -40,7 +40,8 @@ enum DeveloperSession {
         }
 
         var information: CFDictionary?
-        guard SecCodeCopySigningInformation(staticCode, kSecCSSigningInformation, &information) == errSecSuccess,
+        let flags = SecCSFlags(rawValue: kSecCSSigningInformation)
+        guard SecCodeCopySigningInformation(staticCode, flags, &information) == errSecSuccess,
               let information = information as? [String: Any]
         else {
             return nil
