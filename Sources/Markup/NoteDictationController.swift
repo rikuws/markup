@@ -51,15 +51,15 @@ final class NoteDictationController {
     private var contextualPhrases: [String] = []
     private var pendingStart = false
 
-    static var hasMicrophoneAccess: Bool {
+    nonisolated static var hasMicrophoneAccess: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
-    static var needsMicrophonePrompt: Bool {
+    nonisolated static var needsMicrophonePrompt: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined
     }
 
-    static func requestMicrophoneAccessIfNeeded() async {
+    nonisolated static func requestMicrophoneAccessIfNeeded() async {
         guard needsMicrophonePrompt else { return }
         _ = await AVCaptureDevice.requestAccess(for: .audio)
     }
@@ -182,7 +182,7 @@ final class NoteDictationController {
                 options: .init(priority: .userInitiated, modelRetention: .lingering)
             )
             try await analyzer.prepareToAnalyze(in: analysisFormat)
-            try await applyContext(on: analyzer)
+            await applyContext(on: analyzer)
             guard pendingStart, sessionID == currentSession, !Task.isCancelled else {
                 await analyzer.cancelAndFinishNow()
                 return

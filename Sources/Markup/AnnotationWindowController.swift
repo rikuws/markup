@@ -783,7 +783,6 @@ final class ListeningChipButton: NSButton {
         imagePosition = .imageLeading
         font = .systemFont(ofSize: 11, weight: .semibold)
         contentTintColor = .white
-        contentInsets = NSDirectionalEdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8)
         wantsLayer = true
         layer?.cornerRadius = 10
         layer?.masksToBounds = true
