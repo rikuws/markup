@@ -119,21 +119,21 @@ enum LiquidGlassSelectionRenderer {
         context.saveGState()
         context.setShadow(
             offset: .zero,
-            blur: 16 * scale,
-            color: NSColor.white.withAlphaComponent(0.30).cgColor
+            blur: 20 * scale,
+            color: NSColor.white.withAlphaComponent(0.42).cgColor
         )
         stroke(
             roundedPath(rect: rect, radius: radius),
-            color: NSColor.white.withAlphaComponent(0.22),
-            width: 2.5 * scale,
+            color: NSColor.white.withAlphaComponent(0.34),
+            width: 3.2 * scale,
             in: context
         )
         context.restoreGState()
 
         let blooms: [(CGFloat, CGFloat)] = [
-            (10 * scale, 0.05),
-            (7 * scale, 0.07),
-            (4.5 * scale, 0.10)
+            (14 * scale, 0.07),
+            (9 * scale, 0.10),
+            (5.5 * scale, 0.14)
         ]
         for (width, alpha) in blooms {
             stroke(
@@ -151,9 +151,9 @@ enum LiquidGlassSelectionRenderer {
         context.clip()
 
         let colors = [
-            NSColor.white.withAlphaComponent(0.14).cgColor,
-            NSColor.white.withAlphaComponent(0.045).cgColor,
-            NSColor(calibratedRed: 0.78, green: 0.90, blue: 1.0, alpha: 0.03).cgColor
+            NSColor.white.withAlphaComponent(0.20).cgColor,
+            NSColor.white.withAlphaComponent(0.07).cgColor,
+            NSColor(calibratedRed: 0.78, green: 0.90, blue: 1.0, alpha: 0.05).cgColor
         ] as CFArray
         if let gradient = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
@@ -183,23 +183,23 @@ enum LiquidGlassSelectionRenderer {
         let innerPath = roundedPath(rect: inner, radius: innerRadius)
 
         stroke(
-            roundedPath(rect: rect.insetBy(dx: -0.8 * scale, dy: -0.8 * scale), radius: radius + 0.8 * scale),
-            color: NSColor(calibratedRed: 0.55, green: 0.86, blue: 1.0, alpha: 0.16),
-            width: 1.2 * scale,
+            roundedPath(rect: rect.insetBy(dx: -1.2 * scale, dy: -1.2 * scale), radius: radius + 1.2 * scale),
+            color: NSColor(calibratedRed: 0.55, green: 0.86, blue: 1.0, alpha: 0.28),
+            width: 2.2 * scale,
             in: context
         )
         stroke(
-            roundedPath(rect: rect.insetBy(dx: 0.7 * scale, dy: 0.7 * scale), radius: max(2, radius - 0.7 * scale)),
-            color: NSColor(calibratedRed: 1.0, green: 0.62, blue: 0.86, alpha: 0.10),
-            width: 1.1 * scale,
+            roundedPath(rect: rect.insetBy(dx: 1.0 * scale, dy: 1.0 * scale), radius: max(2, radius - 1.0 * scale)),
+            color: NSColor(calibratedRed: 1.0, green: 0.62, blue: 0.86, alpha: 0.16),
+            width: 1.6 * scale,
             in: context
         )
 
-        stroke(path, color: NSColor.white.withAlphaComponent(0.16), width: 6.5 * scale, in: context)
-        stroke(path, color: NSColor.white.withAlphaComponent(0.42), width: 3.6 * scale, in: context)
-        stroke(path, color: NSColor.white.withAlphaComponent(0.86), width: 1.35 * scale, in: context)
-        stroke(innerPath, color: NSColor.white.withAlphaComponent(0.28), width: 0.8 * scale, in: context)
-        stroke(innerPath, color: NSColor.black.withAlphaComponent(0.10), width: 0.6 * scale, in: context)
+        stroke(path, color: NSColor.white.withAlphaComponent(0.22), width: 8.5 * scale, in: context)
+        stroke(path, color: NSColor.white.withAlphaComponent(0.50), width: 4.4 * scale, in: context)
+        stroke(path, color: NSColor.white.withAlphaComponent(0.92), width: 1.6 * scale, in: context)
+        stroke(innerPath, color: NSColor.white.withAlphaComponent(0.36), width: 1.0 * scale, in: context)
+        stroke(innerPath, color: NSColor.black.withAlphaComponent(0.12), width: 0.7 * scale, in: context)
     }
 
     private static func drawSpecularHighlight(
@@ -247,8 +247,8 @@ enum LiquidGlassSelectionRenderer {
         let minimum = 36 * scale
         guard rect.width >= minimum, rect.height >= minimum else { return }
 
-        let size = min(17 * scale, max(11 * scale, min(rect.width, rect.height) * 0.12))
-        let inset = size * 0.08
+        let size = min(20 * scale, max(13 * scale, min(rect.width, rect.height) * 0.13))
+        let inset = size * 0.04
         let centers = [
             CGPoint(x: rect.minX + inset, y: rect.minY + inset),
             CGPoint(x: rect.maxX - inset, y: rect.minY + inset),
