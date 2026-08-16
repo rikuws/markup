@@ -207,12 +207,13 @@ final class AnnotationCanvasView: NSView {
     // MARK: - Liquid Glass overlays
 
     private func setupGlassPane() {
-        // `.clear` is the most transparent glass *style*. A filled pane still
-        // frosts the screenshot, so the live overlay is a Liquid Glass *band*
-        // around the selection — same material, open center.
+        // `.clear` Liquid Glass on a filled rounded rect — only the outer
+        // silhouette is beveled, so there is no inner bevel ring. A melt
+        // overlay then eases that glass color into the center.
         glassPane.sizingOptions = []
         glassPane.wantsLayer = true
         glassPane.layer?.backgroundColor = NSColor.clear.cgColor
+        glassPane.layer?.masksToBounds = false
         glassPane.isHidden = true
         addSubview(glassPane)
     }
@@ -325,7 +326,7 @@ final class PassthroughGlassView: NSGlassEffectView {
     }
 }
 
-/// Hosts the selection's Liquid Glass band without eating mouse events.
+/// Hosts the selection's Liquid Glass pane without eating mouse events.
 private final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     override var isOpaque: Bool { false }
 
@@ -338,37 +339,54 @@ private final class SelectionGlassTuning: ObservableObject {
     @Published var cornerRadius: CGFloat = 16
 }
 
-/// Clear Liquid Glass fitted to the selection. Large boxes keep a glass
-/// rim and an open center; tiny boxes stay a solid pane so they still read.
+/// Clear Liquid Glass fitted to the selection. A filled rounded rect keeps
+/// bevels on the outer silhouette only; the melt overlay washes that glass
+/// color inward so the rim eases into the center.
 private struct SelectionGlassPane: View {
     @ObservedObject var tuning: SelectionGlassTuning
 
     var body: some View {
-        Color.clear
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .glassEffect(.clear, in: GlassSelectionShape(cornerRadius: tuning.cornerRadius))
-            .allowsHitTesting(false)
+        let shape = RoundedRectangle(cornerRadius: tuning.cornerRadius, style: .continuous)
+
+        ZStack {
+            Color.clear
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .glassEffect(.clear, in: shape)
+
+            GlassMeltOverlay(cornerRadius: tuning.cornerRadius)
+        }
+        .allowsHitTesting(false)
     }
 }
 
-private struct GlassSelectionShape: Shape {
+/// Soft glass-tint falloff from the rim into the center. Strokes sit just
+/// inside the outer bevel and are blurred so nothing reads as an inner
+/// border — the pane looks like the glass melted inward.
+private struct GlassMeltOverlay: View {
     var cornerRadius: CGFloat
 
-    func path(in rect: CGRect) -> Path {
-        let shortest = min(rect.width, rect.height)
-        let radius = min(cornerRadius, shortest / 2)
-        let thickness = min(18, max(7, shortest * 0.11))
+    var body: some View {
+        GeometryReader { proxy in
+            let shortest = min(proxy.size.width, proxy.size.height)
+            let radius = min(cornerRadius, shortest / 2)
+            let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            let meltDepth = max(28, min(shortest * 0.48, 100))
 
-        if shortest < thickness * 2 + 10 {
-            return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
+            ZStack {
+                shape.fill(Color.white.opacity(0.045))
+                shape.fill(Color.black.opacity(0.02))
+
+                shape
+                    .stroke(Color.white.opacity(0.22), lineWidth: meltDepth)
+                    .blur(radius: meltDepth * 0.36)
+                    .padding(2)
+                shape
+                    .stroke(Color.white.opacity(0.09), lineWidth: meltDepth * 1.7)
+                    .blur(radius: meltDepth * 0.7)
+                    .padding(2)
+            }
         }
-
-        let inset = thickness / 2
-        let strokeRect = rect.insetBy(dx: inset, dy: inset)
-        let strokeRadius = max(0, radius - inset)
-        return RoundedRectangle(cornerRadius: strokeRadius, style: .continuous)
-            .path(in: strokeRect)
-            .strokedPath(StrokeStyle(lineWidth: thickness, lineJoin: .round))
+        .allowsHitTesting(false)
     }
 }
 

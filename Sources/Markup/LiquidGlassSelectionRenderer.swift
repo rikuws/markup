@@ -1,10 +1,11 @@
 import AppKit
 
 /// Paints a flattened approximation of the Liquid Glass selection pane
-/// into exported screenshots. The live UI uses a real Liquid Glass band
-/// (`.clear` glass fitted to a rounded-rect stroke); system glass cannot
+/// into exported screenshots. The live UI uses a filled `.clear` glass
+/// rounded rect whose rim melts into the interior; system glass cannot
 /// be composited into an offscreen bitmap, so exports get the same read —
-/// a nearly transparent region whose edges fog slightly and catch light.
+/// a soft glass wash, stronger at the edges, with a light-catching outer
+/// rim and no inner bevel.
 enum LiquidGlassSelectionRenderer {
     static func drawPane(rect: CGRect, in context: CGContext, scale: CGFloat = 1) {
         guard rect.width > 1, rect.height > 1 else { return }
@@ -17,7 +18,7 @@ enum LiquidGlassSelectionRenderer {
         context.setAllowsAntialiasing(true)
 
         drawContactShadow(path: path, scale: scale, in: context)
-        drawEdgeFog(rect: rect, path: path, scale: scale, in: context)
+        drawMelt(rect: rect, path: path, scale: scale, in: context)
         drawRim(rect: rect, path: path, scale: scale, in: context)
 
         context.restoreGState()
@@ -38,19 +39,28 @@ enum LiquidGlassSelectionRenderer {
         context.restoreGState()
     }
 
-    /// A faint inner-edge haze while the center stays transparent — the
-    /// look of `.clear` Liquid Glass rather than frosted `.regular` glass.
-    /// Bands stay close to the rim so the export matches the live glass band.
-    private static func drawEdgeFog(rect: CGRect, path: CGPath, scale: CGFloat, in context: CGContext) {
+    /// Glass color across the pane, denser at the rim and easing into the
+    /// center — the look of `.clear` Liquid Glass melting inward rather
+    /// than a punched-out band with an inner bevel.
+    private static func drawMelt(rect: CGRect, path: CGPath, scale: CGFloat, in context: CGContext) {
         context.saveGState()
         context.addPath(path)
         context.clip()
 
+        context.setFillColor(NSColor.white.withAlphaComponent(0.04).cgColor)
+        context.fill(rect)
+        context.setFillColor(NSColor.black.withAlphaComponent(0.02).cgColor)
+        context.fill(rect)
+
+        let shortest = min(rect.width, rect.height)
+        let melt = min(shortest * 0.48, 100 * scale)
         let bands: [(width: CGFloat, alpha: CGFloat)] = [
-            (16 * scale, 0.025),
-            (9 * scale, 0.04),
-            (4.5 * scale, 0.06),
-            (2 * scale, 0.08)
+            (melt * 1.7, 0.03),
+            (melt * 1.15, 0.045),
+            (melt * 0.72, 0.06),
+            (melt * 0.4, 0.08),
+            (melt * 0.18, 0.10),
+            (4 * scale, 0.08)
         ]
         for band in bands {
             context.addPath(path)
@@ -63,7 +73,7 @@ enum LiquidGlassSelectionRenderer {
     }
 
     /// Hairline rim with a slightly brighter top edge, imitating how the
-    /// glass catches light along its silhouette.
+    /// glass catches light along its outer silhouette.
     private static func drawRim(rect: CGRect, path: CGPath, scale: CGFloat, in context: CGContext) {
         context.setStrokeColor(NSColor.white.withAlphaComponent(0.55).cgColor)
         context.setLineWidth(1.2 * scale)
