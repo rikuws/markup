@@ -1,10 +1,10 @@
 import AppKit
 
 /// Paints a flattened approximation of the Liquid Glass selection pane
-/// into exported screenshots. The live UI uses a real `NSGlassEffectView`
-/// with `.clear` style; system glass cannot be composited into an offscreen
-/// bitmap, so exports get the same read — a nearly transparent slab whose
-/// edges fog slightly and catch light.
+/// into exported screenshots. The live UI uses a real Liquid Glass band
+/// (`.clear` glass fitted to a rounded-rect stroke); system glass cannot
+/// be composited into an offscreen bitmap, so exports get the same read —
+/// a nearly transparent region whose edges fog slightly and catch light.
 enum LiquidGlassSelectionRenderer {
     static func drawPane(rect: CGRect, in context: CGContext, scale: CGFloat = 1) {
         guard rect.width > 1, rect.height > 1 else { return }
@@ -28,11 +28,11 @@ enum LiquidGlassSelectionRenderer {
         context.saveGState()
         context.setShadow(
             offset: CGSize(width: 0, height: -2 * scale),
-            blur: 10 * scale,
-            color: NSColor.black.withAlphaComponent(0.14).cgColor
+            blur: 8 * scale,
+            color: NSColor.black.withAlphaComponent(0.10).cgColor
         )
         context.addPath(path)
-        context.setStrokeColor(NSColor.black.withAlphaComponent(0.10).cgColor)
+        context.setStrokeColor(NSColor.black.withAlphaComponent(0.08).cgColor)
         context.setLineWidth(1.5 * scale)
         context.strokePath()
         context.restoreGState()
@@ -40,16 +40,17 @@ enum LiquidGlassSelectionRenderer {
 
     /// A faint inner-edge haze while the center stays transparent — the
     /// look of `.clear` Liquid Glass rather than frosted `.regular` glass.
+    /// Bands stay close to the rim so the export matches the live glass band.
     private static func drawEdgeFog(rect: CGRect, path: CGPath, scale: CGFloat, in context: CGContext) {
         context.saveGState()
         context.addPath(path)
         context.clip()
 
         let bands: [(width: CGFloat, alpha: CGFloat)] = [
-            (28 * scale, 0.035),
-            (16 * scale, 0.05),
-            (8 * scale, 0.07),
-            (3.5 * scale, 0.09)
+            (16 * scale, 0.025),
+            (9 * scale, 0.04),
+            (4.5 * scale, 0.06),
+            (2 * scale, 0.08)
         ]
         for band in bands {
             context.addPath(path)
