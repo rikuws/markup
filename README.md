@@ -7,7 +7,7 @@
 Markup is a local-first macOS menu bar app for capturing UI feedback, marking the exact problem, and saving an agent-ready work bundle directly inside the project that should be fixed.
 
 [![Latest release](https://img.shields.io/github/v/release/rikuws/markup?label=release)](https://github.com/rikuws/markup/releases/latest)
-![macOS 13+](https://img.shields.io/badge/macOS-13%2B-111111?logo=apple)
+![macOS 26+](https://img.shields.io/badge/macOS-26%2B-111111?logo=apple)
 ![Swift 5.9](https://img.shields.io/badge/Swift-5.9-F05138?logo=swift&logoColor=white)
 ![Local first](https://img.shields.io/badge/local--first-yes-2f855a)
 ![Dev server ready](https://img.shields.io/badge/dev--server-ready-6b46c1)
@@ -48,7 +48,7 @@ That gives coding agents the same context a human reviewer would want: what app 
 3. Launch Markup and grant Screen Recording permission when macOS asks.
 4. Open Settings to configure the hotkey, app routes, and the feedback inbox notch.
 
-Markup requires macOS 13 or newer. The first install comes from the DMG or ZIP; later signed releases can be installed from **Check for Updates**. Accessibility permission is useful for richer browser/page context and can be opened from Settings.
+Markup requires macOS 26 (Tahoe) or newer for its Liquid Glass selection UI. The first install comes from the DMG or ZIP; later signed releases can be installed from **Check for Updates**. Accessibility permission is useful for richer browser/page context and can be opened from Settings.
 
 ## Workflow
 

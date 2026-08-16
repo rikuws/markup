@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import ScreenCaptureKit
 
 final class ActiveWindowCapturer {
     func captureActiveWindow() -> CapturedWindow? {
@@ -51,30 +52,64 @@ final class ActiveWindowCapturer {
     }
 
     private func captureWindowImage(windowID: CGWindowID) -> NSImage? {
-        guard let cgImage = CGWindowListCreateImage(
-            .null,
-            .optionIncludingWindow,
-            windowID,
-            [.bestResolution, .boundsIgnoreFraming]
-        ) else {
-            return nil
-        }
+        captureScreenshot { content in
+            guard let window = content.windows.first(where: { $0.windowID == windowID }) else {
+                return nil
+            }
 
-        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let configuration = SCScreenshotConfiguration()
+            configuration.showsCursor = false
+            configuration.ignoreShadows = true
+            configuration.ignoreClipping = true
+            let scale = max(NSScreen.main?.backingScaleFactor ?? 2, 1)
+            configuration.width = max(1, Int((window.frame.width * scale).rounded()))
+            configuration.height = max(1, Int((window.frame.height * scale).rounded()))
+            return (filter, configuration)
+        }
     }
 
     private func captureVisibleWindowRegion(bounds: CGRect) -> NSImage? {
-        guard bounds.width > 0, bounds.height > 0,
-              let cgImage = CGWindowListCreateImage(
-                bounds,
-                .optionOnScreenOnly,
-                kCGNullWindowID,
-                [.bestResolution]
-              )
-        else {
-            return nil
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+
+        return captureScreenshot { content in
+            let display = displayContaining(bounds, in: content.displays)
+            guard let display else { return nil }
+
+            let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+            let configuration = SCScreenshotConfiguration()
+            configuration.showsCursor = false
+            configuration.sourceRect = bounds
+            let scale = max(NSScreen.main?.backingScaleFactor ?? 2, 1)
+            configuration.width = max(1, Int((bounds.width * scale).rounded()))
+            configuration.height = max(1, Int((bounds.height * scale).rounded()))
+            return (filter, configuration)
+        }
+    }
+
+    private func captureScreenshot(
+        makeRequest: @escaping @Sendable (SCShareableContent) -> (SCContentFilter, SCScreenshotConfiguration)?
+    ) -> NSImage? {
+        let box = ScreenshotBox()
+        let semaphore = DispatchSemaphore(value: 0)
+
+        Task.detached {
+            defer { semaphore.signal() }
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                guard let (filter, configuration) = makeRequest(content) else { return }
+                let output = try await SCScreenshotManager.captureScreenshot(
+                    contentFilter: filter,
+                    configuration: configuration
+                )
+                box.image = output.sdrImage
+            } catch {
+                NSLog("Markup: ScreenCaptureKit screenshot failed: \(error.localizedDescription)")
+            }
         }
 
+        _ = semaphore.wait(timeout: .now() + 8)
+        guard let cgImage = box.image else { return nil }
         return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
     }
 
@@ -241,6 +276,25 @@ final class ActiveWindowCapturer {
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty } ?? "Untitled Window"
     }
+}
+
+private func displayContaining(_ bounds: CGRect, in displays: [SCDisplay]) -> SCDisplay? {
+    let center = CGPoint(x: bounds.midX, y: bounds.midY)
+    if let exact = displays.first(where: { $0.frame.contains(center) }) {
+        return exact
+    }
+
+    return displays.max { lhs, rhs in
+        let left = lhs.frame.intersection(bounds)
+        let right = rhs.frame.intersection(bounds)
+        let leftArea = left.isNull || left.isEmpty ? 0 : left.width * left.height
+        let rightArea = right.isNull || right.isEmpty ? 0 : right.width * right.height
+        return leftArea < rightArea
+    }
+}
+
+private final class ScreenshotBox: @unchecked Sendable {
+    var image: CGImage?
 }
 
 private struct FocusedAXWindow {
