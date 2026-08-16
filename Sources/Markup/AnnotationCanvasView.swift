@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 final class AnnotationCanvasView: NSView {
     var onSelectionChanged: (() -> Void)?
@@ -31,7 +32,10 @@ final class AnnotationCanvasView: NSView {
     private var cgImage: CGImage
     private var dragStart: NSPoint?
     private let imageCornerRadius: CGFloat = 12
-    private let glassPane = PassthroughGlassView()
+    private let glassTuning = SelectionGlassTuning()
+    private lazy var glassPane: PassthroughHostingView<SelectionGlassPane> = {
+        PassthroughHostingView(rootView: SelectionGlassPane(tuning: glassTuning))
+    }()
     private let hintCapsule = PassthroughGlassView()
     private let hintLabel = NSTextField(labelWithString: "")
     private var selectionRect: NSRect? {
@@ -203,10 +207,12 @@ final class AnnotationCanvasView: NSView {
     // MARK: - Liquid Glass overlays
 
     private func setupGlassPane() {
-        // `.clear` is still Liquid Glass, but it keeps the screenshot readable
-        // through the pane. `.regular` frosts the whole selection too heavily.
-        glassPane.style = .clear
-        glassPane.tintColor = nil
+        // `.clear` is the most transparent glass *style*. A filled pane still
+        // frosts the screenshot, so the live overlay is a Liquid Glass *band*
+        // around the selection — same material, open center.
+        glassPane.sizingOptions = []
+        glassPane.wantsLayer = true
+        glassPane.layer?.backgroundColor = NSColor.clear.cgColor
         glassPane.isHidden = true
         addSubview(glassPane)
     }
@@ -247,8 +253,11 @@ final class AnnotationCanvasView: NSView {
 
         if let selection = selectionRect?.intersection(imageRect),
            selection.width >= 2, selection.height >= 2 {
+            let cornerRadius = min(26, min(selection.width, selection.height) / 2.5)
             glassPane.frame = selection
-            glassPane.cornerRadius = min(26, min(selection.width, selection.height) / 2.5)
+            if glassTuning.cornerRadius != cornerRadius {
+                glassTuning.cornerRadius = cornerRadius
+            }
             glassPane.isHidden = false
             hintCapsule.isHidden = true
         } else {
@@ -313,6 +322,53 @@ final class AnnotationCanvasView: NSView {
 final class PassthroughGlassView: NSGlassEffectView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
+    }
+}
+
+/// Hosts the selection's Liquid Glass band without eating mouse events.
+private final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
+    override var isOpaque: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
+private final class SelectionGlassTuning: ObservableObject {
+    @Published var cornerRadius: CGFloat = 16
+}
+
+/// Clear Liquid Glass fitted to the selection. Large boxes keep a glass
+/// rim and an open center; tiny boxes stay a solid pane so they still read.
+private struct SelectionGlassPane: View {
+    @ObservedObject var tuning: SelectionGlassTuning
+
+    var body: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .glassEffect(.clear, in: GlassSelectionShape(cornerRadius: tuning.cornerRadius))
+            .allowsHitTesting(false)
+    }
+}
+
+private struct GlassSelectionShape: Shape {
+    var cornerRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let shortest = min(rect.width, rect.height)
+        let radius = min(cornerRadius, shortest / 2)
+        let thickness = min(18, max(7, shortest * 0.11))
+
+        if shortest < thickness * 2 + 10 {
+            return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: rect)
+        }
+
+        let inset = thickness / 2
+        let strokeRect = rect.insetBy(dx: inset, dy: inset)
+        let strokeRadius = max(0, radius - inset)
+        return RoundedRectangle(cornerRadius: strokeRadius, style: .continuous)
+            .path(in: strokeRect)
+            .strokedPath(StrokeStyle(lineWidth: thickness, lineJoin: .round))
     }
 }
 
