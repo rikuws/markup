@@ -72,12 +72,17 @@ final class StatusBarController: NSObject {
     }
 
     private static func loadImageResource(named name: String, extension ext: String) -> NSImage? {
-        let resourceURL = Bundle.main.url(forResource: name, withExtension: ext)
-            ?? Bundle.module.url(forResource: name, withExtension: ext)
-        guard let resourceURL else {
-            return nil
+        if let resourceURL = Bundle.main.url(forResource: name, withExtension: ext) {
+            return NSImage(contentsOf: resourceURL)
         }
-        return NSImage(contentsOf: resourceURL)
+
+        #if SWIFT_PACKAGE
+        if let resourceURL = Bundle.module.url(forResource: name, withExtension: ext) {
+            return NSImage(contentsOf: resourceURL)
+        }
+        #endif
+
+        return nil
     }
 
     private func makeMenu() -> NSMenu {

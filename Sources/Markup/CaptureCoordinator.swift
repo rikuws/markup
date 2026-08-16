@@ -65,10 +65,7 @@ final class CaptureCoordinator {
     }
 
     private func startNewDraft() {
-        guard capturer.ensureScreenCapturePermission() else {
-            showScreenRecordingPermissionAlert()
-            return
-        }
+        guard ensureCaptureAccess() else { return }
 
         guard let captured = capturer.captureActiveWindow() else {
             showAlert(
@@ -100,10 +97,7 @@ final class CaptureCoordinator {
             return
         }
 
-        guard capturer.ensureScreenCapturePermission() else {
-            showScreenRecordingPermissionAlert()
-            return
-        }
+        guard ensureCaptureAccess() else { return }
 
         guard let captured = capturer.captureActiveWindow() else {
             showAlert(
@@ -384,11 +378,57 @@ final class CaptureCoordinator {
         alert.runModal()
     }
 
+    private func ensureCaptureAccess() -> Bool {
+        switch capturer.screenCaptureAccess() {
+        case .granted:
+            return true
+        case .blockedByDebugger:
+            showDebuggerBlocksCaptureAlert()
+            return false
+        case .needsRelaunch:
+            showPermissionGrantedRelaunchAlert()
+            return false
+        case .denied:
+            showScreenRecordingPermissionAlert()
+            return false
+        }
+    }
+
+    private func showDebuggerBlocksCaptureAlert() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Screen Recording Can't Run Under the Debugger"
+        alert.informativeText = """
+        macOS will not give Markup a working Screen Recording permission while Xcode's debugger is attached. The system prompt can appear on every Run, and capture still fails after you relaunch from Xcode.
+
+        Stop this session and Run the Markup scheme (Debug executable is off). Or relaunch Markup now without the debugger.
+        """
+        alert.addButton(withTitle: "Relaunch Without Debugger")
+        alert.addButton(withTitle: "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            DeveloperSession.relaunchDetached()
+        }
+    }
+
+    private func showPermissionGrantedRelaunchAlert() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Relaunch Markup to Finish Setup"
+        alert.informativeText = "Screen Recording permission was granted, but macOS only applies it after Markup starts again. Microphone permission is requested on the next capture."
+        alert.addButton(withTitle: "Relaunch Markup")
+        alert.addButton(withTitle: "Later")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            DeveloperSession.relaunchDetached()
+        }
+    }
+
     private func showScreenRecordingPermissionAlert() {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.messageText = "Screen Recording Permission Needed"
-        alert.informativeText = "Markup needs Screen Recording permission before it can show the screenshot editor. After enabling it, relaunch Markup and try the hotkey again."
+        alert.informativeText = deniedPermissionMessage()
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
 
@@ -396,5 +436,13 @@ final class CaptureCoordinator {
            let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    private func deniedPermissionMessage() -> String {
+        if let warning = DeveloperSession.tccStabilityWarning {
+            return warning
+        }
+
+        return "Markup needs Screen Recording permission before it can show the screenshot editor. After enabling it, relaunch Markup and try the hotkey again."
     }
 }

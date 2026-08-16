@@ -95,32 +95,45 @@ struct SettingsView: View {
     private var permissionsSection: some View {
         SettingsSection(
             title: "Permissions",
-            subtitle: "Screen capture is required. Microphone is used to talk while you mark a screenshot."
+            subtitle: permissionsSubtitle
         ) {
-            HStack(spacing: 10) {
-                Button {
-                    openPrivacyPane("Privacy_ScreenCapture")
-                } label: {
-                    Label("Screen Recording", systemImage: "record.circle")
-                }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Button {
+                        openPrivacyPane("Privacy_ScreenCapture")
+                    } label: {
+                        Label("Screen Recording", systemImage: "record.circle")
+                    }
 
-                Button {
-                    openPrivacyPane("Privacy_Microphone")
-                } label: {
-                    Label("Microphone", systemImage: "mic")
-                }
+                    Button {
+                        openPrivacyPane("Privacy_Microphone")
+                    } label: {
+                        Label("Microphone", systemImage: "mic")
+                    }
 
-                Button {
-                    openPrivacyPane("Privacy_Accessibility")
-                } label: {
-                    Label("Accessibility", systemImage: "accessibility")
-                }
+                    Button {
+                        openPrivacyPane("Privacy_Accessibility")
+                    } label: {
+                        Label("Accessibility", systemImage: "accessibility")
+                    }
 
-                Spacer()
+                    Spacer()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+
+                if let warning = DeveloperSession.tccStabilityWarning {
+                    Text(warning)
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
         }
+    }
+
+    private var permissionsSubtitle: String {
+        "Screen capture is required. Microphone is used to talk while you mark a screenshot."
     }
 
     private var hotKeySection: some View {

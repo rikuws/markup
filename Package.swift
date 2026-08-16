@@ -20,7 +20,8 @@ let package = Package(
             ],
             path: "Sources/Markup",
             exclude: [
-                "Markup.entitlements"
+                "Markup.entitlements",
+                "Info.plist"
             ],
             resources: [
                 .process("Resources")
