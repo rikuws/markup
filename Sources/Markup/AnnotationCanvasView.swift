@@ -106,7 +106,7 @@ final class AnnotationCanvasView: NSView {
         }
 
         dimOutside(selection, in: imageRect)
-        drawSelection(selection, in: imageRect)
+        drawLiquidGlassSelection(selection, in: imageRect)
     }
 
     override func resetCursorRects() {
@@ -169,7 +169,7 @@ final class AnnotationCanvasView: NSView {
     private func dimOutside(_ selection: NSRect, in imageRect: NSRect) {
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(roundedRect: imageRect, xRadius: imageCornerRadius, yRadius: imageCornerRadius).addClip()
-        NSColor.black.withAlphaComponent(0.54).setFill()
+        NSColor.black.withAlphaComponent(0.46).setFill()
 
         NSRect(x: imageRect.minX, y: imageRect.minY, width: imageRect.width, height: selection.minY - imageRect.minY).fill()
         NSRect(x: imageRect.minX, y: selection.maxY, width: imageRect.width, height: imageRect.maxY - selection.maxY).fill()
@@ -209,121 +209,27 @@ final class AnnotationCanvasView: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func drawSelection(_ rect: NSRect, in imageRect: NSRect) {
-        let radius = min(7, max(2, min(rect.width, rect.height) / 10))
-        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+    private func drawLiquidGlassSelection(_ rect: NSRect, in imageRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
 
-        NSColor.black.withAlphaComponent(0.62).setStroke()
-        path.lineWidth = 7
-        path.stroke()
-
-        NSColor.white.withAlphaComponent(0.92).setStroke()
-        path.lineWidth = 4
-        path.stroke()
-
-        NSColor.systemBlue.setStroke()
-        path.lineWidth = 2.5
-        path.stroke()
-
-        drawCornerTicks(in: rect)
-        drawDimensionBadge(for: rect, within: imageRect)
-    }
-
-    private func drawCornerTicks(in rect: NSRect) {
-        guard rect.width >= 28, rect.height >= 28 else { return }
-
-        let length = min(28, max(14, min(rect.width, rect.height) * 0.18))
-        let path = NSBezierPath()
-        path.lineCapStyle = .round
-        path.lineJoinStyle = .round
-
-        path.move(to: NSPoint(x: rect.minX, y: rect.minY + length))
-        path.line(to: NSPoint(x: rect.minX, y: rect.minY))
-        path.line(to: NSPoint(x: rect.minX + length, y: rect.minY))
-
-        path.move(to: NSPoint(x: rect.maxX - length, y: rect.minY))
-        path.line(to: NSPoint(x: rect.maxX, y: rect.minY))
-        path.line(to: NSPoint(x: rect.maxX, y: rect.minY + length))
-
-        path.move(to: NSPoint(x: rect.maxX, y: rect.maxY - length))
-        path.line(to: NSPoint(x: rect.maxX, y: rect.maxY))
-        path.line(to: NSPoint(x: rect.maxX - length, y: rect.maxY))
-
-        path.move(to: NSPoint(x: rect.minX + length, y: rect.maxY))
-        path.line(to: NSPoint(x: rect.minX, y: rect.maxY))
-        path.line(to: NSPoint(x: rect.minX, y: rect.maxY - length))
-
-        NSColor.white.withAlphaComponent(0.96).setStroke()
-        path.lineWidth = 5
-        path.stroke()
-
-        NSColor.systemBlue.setStroke()
-        path.lineWidth = 3
-        path.stroke()
-    }
-
-    private func drawDimensionBadge(for rect: NSRect, within imageRect: NSRect) {
-        guard let captureRegion else { return }
-
-        let label = "\(captureRegion.width) x \(captureRegion.height)"
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .semibold),
-            .foregroundColor: NSColor.white
-        ]
-        let labelSize = (label as NSString).size(withAttributes: attributes)
-        let badgeSize = NSSize(width: labelSize.width + 18, height: labelSize.height + 10)
-        let x = min(max(rect.minX, imageRect.minX + 10), imageRect.maxX - badgeSize.width - 10)
-        let preferredY = rect.maxY + 10
-        let unclampedY = preferredY + badgeSize.height <= imageRect.maxY
-            ? preferredY
-            : rect.maxY - badgeSize.height - 10
-        let y = min(max(unclampedY, imageRect.minY + 10), imageRect.maxY - badgeSize.height - 10)
-        let badgeRect = NSRect(origin: NSPoint(x: x, y: y), size: badgeSize)
-        let badgePath = NSBezierPath(roundedRect: badgeRect, xRadius: 12, yRadius: 12)
-
-        NSColor.black.withAlphaComponent(0.72).setFill()
-        badgePath.fill()
-        NSColor.white.withAlphaComponent(0.18).setStroke()
-        badgePath.lineWidth = 1
-        badgePath.stroke()
-
-        let labelRect = NSRect(
-            x: badgeRect.minX + 9,
-            y: badgeRect.minY + 5,
-            width: labelSize.width,
-            height: labelSize.height
+        let dimensions = captureRegion.map { "\($0.width) × \($0.height)" }
+        LiquidGlassSelectionRenderer.drawSelection(
+            rect: rect,
+            in: context,
+            bounds: imageRect,
+            style: LiquidGlassSelectionRenderer.Style(
+                scale: 1,
+                showsHandles: true,
+                dimensions: dimensions
+            )
         )
-        (label as NSString).draw(in: labelRect, withAttributes: attributes)
     }
 
     private func drawHint(in imageRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+
         let hint = isSelectionOptional ? "Optional: select issue area" : "Select the issue area"
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 15, weight: .semibold),
-            .foregroundColor: NSColor.white
-        ]
-        let textSize = (hint as NSString).size(withAttributes: attributes)
-        let bubbleRect = NSRect(
-            x: imageRect.midX - (textSize.width + 28) / 2,
-            y: imageRect.midY - (textSize.height + 18) / 2,
-            width: textSize.width + 28,
-            height: textSize.height + 18
-        )
-        let bubble = NSBezierPath(roundedRect: bubbleRect, xRadius: 14, yRadius: 14)
-
-        NSColor.black.withAlphaComponent(0.58).setFill()
-        bubble.fill()
-        NSColor.white.withAlphaComponent(0.18).setStroke()
-        bubble.lineWidth = 1
-        bubble.stroke()
-
-        let textRect = NSRect(
-            x: bubbleRect.minX + 14,
-            y: bubbleRect.minY + 9,
-            width: textSize.width,
-            height: textSize.height
-        )
-        (hint as NSString).draw(in: textRect, withAttributes: attributes)
+        LiquidGlassSelectionRenderer.drawHint(hint, centeredIn: imageRect, in: context)
     }
 
     private func clamp(_ point: NSPoint, to rect: NSRect) -> NSPoint {
