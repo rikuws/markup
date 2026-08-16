@@ -1,9 +1,10 @@
 import AppKit
 
 /// Paints a flattened approximation of the Liquid Glass selection pane
-/// into exported screenshots. The live UI uses a real `NSGlassEffectView`;
-/// system glass cannot be composited into an offscreen bitmap, so exports
-/// get the same read — a clear slab whose edges fog and catch light.
+/// into exported screenshots. The live UI uses a real `NSGlassEffectView`
+/// with `.clear` style; system glass cannot be composited into an offscreen
+/// bitmap, so exports get the same read — a nearly transparent slab whose
+/// edges fog slightly and catch light.
 enum LiquidGlassSelectionRenderer {
     static func drawPane(rect: CGRect, in context: CGContext, scale: CGFloat = 1) {
         guard rect.width > 1, rect.height > 1 else { return }
@@ -28,7 +29,7 @@ enum LiquidGlassSelectionRenderer {
         context.setShadow(
             offset: CGSize(width: 0, height: -2 * scale),
             blur: 10 * scale,
-            color: NSColor.black.withAlphaComponent(0.22).cgColor
+            color: NSColor.black.withAlphaComponent(0.14).cgColor
         )
         context.addPath(path)
         context.setStrokeColor(NSColor.black.withAlphaComponent(0.10).cgColor)
@@ -37,18 +38,18 @@ enum LiquidGlassSelectionRenderer {
         context.restoreGState()
     }
 
-    /// The milky band that hugs the inside of the edge while the center
-    /// stays clear — the defining look of the glass slab.
+    /// A faint inner-edge haze while the center stays transparent — the
+    /// look of `.clear` Liquid Glass rather than frosted `.regular` glass.
     private static func drawEdgeFog(rect: CGRect, path: CGPath, scale: CGFloat, in context: CGContext) {
         context.saveGState()
         context.addPath(path)
         context.clip()
 
         let bands: [(width: CGFloat, alpha: CGFloat)] = [
-            (44 * scale, 0.07),
-            (26 * scale, 0.10),
-            (14 * scale, 0.13),
-            (7 * scale, 0.16)
+            (28 * scale, 0.035),
+            (16 * scale, 0.05),
+            (8 * scale, 0.07),
+            (3.5 * scale, 0.09)
         ]
         for band in bands {
             context.addPath(path)

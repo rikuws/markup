@@ -203,7 +203,10 @@ final class AnnotationCanvasView: NSView {
     // MARK: - Liquid Glass overlays
 
     private func setupGlassPane() {
-        glassPane.style = .regular
+        // `.clear` is still Liquid Glass, but it keeps the screenshot readable
+        // through the pane. `.regular` frosts the whole selection too heavily.
+        glassPane.style = .clear
+        glassPane.tintColor = nil
         glassPane.isHidden = true
         addSubview(glassPane)
     }
@@ -221,6 +224,8 @@ final class AnnotationCanvasView: NSView {
             hintLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor)
         ])
 
+        // The hint is a small labeled chip, not a see-through overlay, so
+        // `.regular` glass keeps the text readable.
         hintCapsule.style = .regular
         hintCapsule.contentView = content
         hintCapsule.isHidden = true
