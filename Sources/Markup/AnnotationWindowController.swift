@@ -38,7 +38,7 @@ final class AnnotationWindowController: NSWindowController {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.onEscape = { [weak viewController] in
-            viewController?.cancelAnnotation()
+            viewController?.handleEscape()
         }
 
         super.init(window: window)
@@ -109,6 +109,11 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
     private let selectedShotLabel = NSTextField(labelWithString: "")
     private let labelField = NSTextField()
     private let noteTextView = PlaceholderTextView(placeholder: "Describe what should change, what looks wrong, or what the agent should fix.")
+    private let noteLabel = NSTextField(labelWithString: "Note")
+    private let listeningChip = ListeningChipButton()
+    private let dictation = NoteDictationController()
+    private let idleShortcutHints = NSStackView()
+    private let listeningShortcutHints = NSStackView()
     private let saveButton = NSButton(title: "Save", target: nil, action: nil)
     private let addShotButton = NSButton(title: "Add Shot", target: nil, action: nil)
     private let deleteShotButton = NSButton(title: "Delete Shot", target: nil, action: nil)
@@ -116,6 +121,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
     private let recordingBadge = NSTextField(labelWithString: "")
     private var selectedShotID: UUID
     private var visibleAppendBadgeConstraints: [NSLayoutConstraint] = []
+    private var isApplyingDictation = false
 
     var initialFirstResponder: NSResponder {
         canvas
@@ -147,6 +153,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         self.selectedShotID = initialShot.id
         canvas = AnnotationCanvasView(image: initialShot.captured.image)
         super.init(nibName: nil, bundle: nil)
+        configureDictation()
     }
 
     required init?(coder: NSCoder) {
@@ -171,9 +178,19 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         super.viewDidAppear()
         view.window?.makeFirstResponder(canvas)
         canvas.setCaptureRegion(selectedShot.region)
+        refreshDictationContext()
+        dictation.adoptExistingNote(draft.note)
+        dictation.startListening()
+    }
+
+    override func viewWillDisappear() {
+        dictation.teardown()
+        super.viewWillDisappear()
     }
 
     func textDidChange(_ notification: Notification) {
+        guard !isApplyingDictation else { return }
+        dictation.noteWasEdited(noteTextView.string)
         draft.note = noteTextView.string
         updateSaveState()
     }
@@ -201,13 +218,47 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         }
         canvas.onSelectionCompleted = { [weak self] in
             guard let self else { return }
-            if self.canvas.captureRegion != nil {
+            if self.canvas.captureRegion != nil, !self.dictation.isListening {
                 self.view.window?.makeFirstResponder(self.noteTextView)
             }
         }
         noteTextView.delegate = self
         noteTextView.string = draft.note
         labelField.delegate = self
+        listeningChip.target = self
+        listeningChip.action = #selector(listeningChipClicked)
+    }
+
+    private func configureDictation() {
+        dictation.onStateChanged = { [weak self] state in
+            self?.applyDictationState(state)
+        }
+        dictation.onTranscriptChanged = { [weak self] committed, volatile in
+            self?.applyDictationTranscript(committed: committed, volatile: volatile)
+        }
+        dictation.onSpeechDetectedChanged = { [weak self] detected in
+            self?.listeningChip.speechDetected = detected
+        }
+    }
+
+    private func refreshDictationContext() {
+        let captured = selectedShot.captured
+        var extras = [captured.appName, captured.windowTitle, captured.routeName]
+        if !selectedShot.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            extras.append(selectedShot.label)
+        }
+        if let routeName = route?.appName {
+            extras.append(routeName)
+        }
+        if let pageTitle = captured.browserPage?.title {
+            extras.append(pageTitle)
+        }
+        if let pageRoute = captured.browserPage?.routeName {
+            extras.append(pageRoute)
+        }
+
+        let cgImage = captured.image.bestCGImage()
+        dictation.setContextualPhrases(ScreenshotTextIndex.phrases(from: cgImage, extras: extras))
     }
 
     private func buildLayout() {
@@ -238,10 +289,8 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         recordingBadge.font = .systemFont(ofSize: 12, weight: .semibold)
         recordingBadge.setContentCompressionResistancePriority(.required, for: .horizontal)
 
-        let shortcutHints = NSStackView(views: [
-            ShortcutHintView(key: "Esc", label: "Cancel"),
-            ShortcutHintView(key: "Return", label: "Save")
-        ])
+        configureShortcutHints()
+        let shortcutHints = NSStackView(views: [idleShortcutHints, listeningShortcutHints])
         shortcutHints.translatesAutoresizingMaskIntoConstraints = false
         shortcutHints.orientation = .horizontal
         shortcutHints.spacing = 12
@@ -325,8 +374,12 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
 
         let noteSurface = AnnotationSurfaceView()
         noteSurface.translatesAutoresizingMaskIntoConstraints = false
-        noteTextView.onFocusChanged = { [weak noteSurface] isFocused in
+        noteTextView.onFocusChanged = { [weak self, weak noteSurface] isFocused in
             noteSurface?.isActive = isFocused
+            guard let self else { return }
+            if isFocused {
+                self.dictation.noteWasEdited(self.noteTextView.string)
+            }
         }
 
         let noteScroll = NSScrollView()
@@ -360,10 +413,20 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         noteTextView.allowsUndo = true
         noteSurface.installContentView(noteScroll)
 
-        let noteLabel = NSTextField(labelWithString: "Note")
         noteLabel.translatesAutoresizingMaskIntoConstraints = false
         noteLabel.textColor = NSColor.white.withAlphaComponent(0.92)
         noteLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+
+        listeningChip.translatesAutoresizingMaskIntoConstraints = false
+        listeningChip.setContentHuggingPriority(.required, for: .horizontal)
+        listeningChip.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let noteHeader = NSStackView(views: [noteLabel, listeningChip, NSView()])
+        noteHeader.translatesAutoresizingMaskIntoConstraints = false
+        noteHeader.orientation = .horizontal
+        noteHeader.alignment = .centerY
+        noteHeader.spacing = 8
+        noteHeader.setContentHuggingPriority(.required, for: .vertical)
 
         recordButton.target = self
         recordButton.action = #selector(recordSelected)
@@ -400,7 +463,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         noteSection.translatesAutoresizingMaskIntoConstraints = false
         noteSection.setContentHuggingPriority(.required, for: .vertical)
         noteSection.setContentCompressionResistancePriority(.required, for: .vertical)
-        noteSection.addSubview(noteLabel)
+        noteSection.addSubview(noteHeader)
         noteSection.addSubview(noteSurface)
 
         container.addSubview(headerRow)
@@ -449,11 +512,12 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             canvas.bottomAnchor.constraint(equalTo: noteSection.topAnchor, constant: -12),
             noteSection.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             noteSection.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            noteLabel.topAnchor.constraint(equalTo: noteSection.topAnchor),
-            noteLabel.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor, constant: 2),
+            noteHeader.topAnchor.constraint(equalTo: noteSection.topAnchor),
+            noteHeader.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor),
+            noteHeader.trailingAnchor.constraint(equalTo: noteSection.trailingAnchor),
             noteSurface.leadingAnchor.constraint(equalTo: noteSection.leadingAnchor),
             noteSurface.trailingAnchor.constraint(equalTo: noteSection.trailingAnchor),
-            noteSurface.topAnchor.constraint(equalTo: noteLabel.bottomAnchor, constant: 8),
+            noteSurface.topAnchor.constraint(equalTo: noteHeader.bottomAnchor, constant: 8),
             noteSurface.bottomAnchor.constraint(equalTo: noteSection.bottomAnchor),
             noteSurface.heightAnchor.constraint(equalToConstant: 156),
             noteSection.bottomAnchor.constraint(equalTo: actions.topAnchor, constant: -12),
@@ -488,9 +552,18 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             isSelectionOptional: !draft.requiresRegions
         )
         rebuildShotStrip()
+        refreshDictationContext()
     }
 
     private func helperText(for index: Int) -> String {
+        if dictation.isListening {
+            return "Draw a box and talk — Markup is listening."
+        }
+
+        if dictation.state == .muted {
+            return "Listening is muted. Click the chip to talk while you mark."
+        }
+
         if draft.recordingURL != nil {
             if draft.shots.count > 1 {
                 return "Recording attached. Region boxes are optional; the note applies to all shots."
@@ -503,7 +576,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             return "Shot \(index) of \(draft.shots.count). Select the region for this view; the note applies to all shots."
         }
 
-        return "Drag one box around the issue, then write the instruction for the coding agent."
+        return "Drag one box around the issue, then write or talk the instruction for the coding agent."
     }
 
     private func rebuildShotStrip() {
@@ -533,12 +606,14 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         selectedShotID = sender.shotID
         updateSelectedShotUI()
         view.window?.makeFirstResponder(canvas)
+        refreshDictationContext()
     }
 
     @objc private func saveSelected() {
         guard draft.isComplete else {
             NSSound.beep()
-            if draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if draft.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !dictation.isListening {
                 view.window?.makeFirstResponder(noteTextView)
             } else if draft.requiresRegions,
                       let missing = draft.shots.first(where: { $0.region == nil }) {
@@ -549,6 +624,7 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             return
         }
 
+        dictation.teardown()
         onSave()
     }
 
@@ -566,12 +642,23 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         cancelAnnotation()
     }
 
+    func handleEscape() {
+        if dictation.isListening || dictation.state == .preparing {
+            dictation.mute()
+            return
+        }
+
+        cancelAnnotation()
+    }
+
     func cancelAnnotation() {
+        dictation.teardown()
         onCancel()
         view.window?.close()
     }
 
     @objc private func recordSelected() {
+        dictation.teardown()
         onRecord(selectedShotID)
     }
 
@@ -581,7 +668,71 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
             return
         }
 
+        dictation.teardown()
         onAddShot()
+    }
+
+    @objc private func listeningChipClicked() {
+        switch dictation.state {
+        case .unavailable:
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
+            }
+        default:
+            dictation.toggleMuted()
+        }
+    }
+
+    private func configureShortcutHints() {
+        for hints in [idleShortcutHints, listeningShortcutHints] {
+            hints.translatesAutoresizingMaskIntoConstraints = false
+            hints.orientation = .horizontal
+            hints.spacing = 12
+            hints.alignment = .centerY
+            hints.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+
+        idleShortcutHints.addArrangedSubview(ShortcutHintView(key: "Esc", label: "Cancel"))
+        idleShortcutHints.addArrangedSubview(ShortcutHintView(key: "Return", label: "Save"))
+        listeningShortcutHints.addArrangedSubview(ShortcutHintView(key: "Esc", label: "Mute"))
+        listeningShortcutHints.isHidden = true
+    }
+
+    private func applyDictationState(_ state: NoteDictationController.State) {
+        listeningChip.mode = {
+            switch state {
+            case .idle: return .hidden
+            case .preparing: return .preparing
+            case .listening: return .listening
+            case .muted: return .muted
+            case .unavailable: return .unavailable
+            }
+        }()
+        idleShortcutHints.isHidden = state == .listening || state == .preparing
+        listeningShortcutHints.isHidden = !idleShortcutHints.isHidden
+        saveButton.keyEquivalent = dictation.isListening ? "" : "\r"
+        helperLabel.stringValue = helperText(for: selectedShotIndex + 1)
+        updateSaveState()
+    }
+
+    private func applyDictationTranscript(committed: String, volatile: String) {
+        guard view.window?.firstResponder !== noteTextView else { return }
+
+        let combined = [committed, volatile]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+
+        let responder = view.window?.firstResponder
+        isApplyingDictation = true
+        noteTextView.string = combined
+        draft.note = combined
+        isApplyingDictation = false
+        updateSaveState()
+
+        if let responder, responder !== noteTextView {
+            view.window?.makeFirstResponder(responder)
+        }
     }
 
     @objc private func deleteShotSelected() {
@@ -602,6 +753,112 @@ final class AnnotationViewController: NSViewController, NSTextViewDelegate, NSTe
         saveButton.isEnabled = draft.isComplete
         addShotButton.isEnabled = draft.canAddShot
         deleteShotButton.isEnabled = selectedShotIndex > 0
+    }
+}
+
+final class ListeningChipButton: NSButton {
+    enum Mode {
+        case hidden
+        case preparing
+        case listening
+        case muted
+        case unavailable
+    }
+
+    var mode: Mode = .hidden {
+        didSet { applyMode() }
+    }
+
+    var speechDetected = false {
+        didSet { applyMode() }
+    }
+
+    private var pulseTimer: Timer?
+    private var pulseOn = false
+
+    init() {
+        super.init(frame: .zero)
+        bezelStyle = .inline
+        isBordered = false
+        imagePosition = .imageLeading
+        font = .systemFont(ofSize: 11, weight: .semibold)
+        contentTintColor = .white
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.masksToBounds = true
+        translatesAutoresizingMaskIntoConstraints = false
+        applyMode()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    deinit {
+        pulseTimer?.invalidate()
+    }
+
+    override var intrinsicContentSize: NSSize {
+        let size = super.intrinsicContentSize
+        return NSSize(width: max(size.width, 88), height: 22)
+    }
+
+    private func applyMode() {
+        isHidden = mode == .hidden
+        isEnabled = mode != .preparing
+        pulseTimer?.invalidate()
+        pulseTimer = nil
+        pulseOn = false
+
+        switch mode {
+        case .hidden:
+            title = ""
+            image = nil
+            toolTip = nil
+            layer?.backgroundColor = NSColor.clear.cgColor
+        case .preparing:
+            title = "Preparing"
+            image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
+            toolTip = "Preparing on-device dictation"
+            layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        case .listening:
+            title = "Listening"
+            image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)
+            toolTip = "Click to mute. Escape also mutes."
+            startPulse()
+        case .muted:
+            title = "Muted"
+            image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil)
+            toolTip = "Click to talk while you mark"
+            layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        case .unavailable:
+            title = "Mic off"
+            image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil)
+            toolTip = "Microphone permission is needed for talk-while-you-draw notes"
+            layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.55).cgColor
+        }
+
+        if mode == .listening {
+            updateListeningBackground()
+        }
+
+        needsDisplay = true
+        invalidateIntrinsicContentSize()
+    }
+
+    private func startPulse() {
+        updateListeningBackground()
+        pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.pulseOn.toggle()
+            self.updateListeningBackground()
+        }
+        pulseTimer?.tolerance = 0.1
+    }
+
+    private func updateListeningBackground() {
+        let active = speechDetected || pulseOn
+        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(active ? 0.92 : 0.62).cgColor
     }
 }
 

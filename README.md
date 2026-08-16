@@ -35,6 +35,7 @@ That gives coding agents the same context a human reviewer would want: what app 
 | Menu bar capture | Capture the active window from the menu bar or with the default `Cmd+Shift+M` hotkey. |
 | Dev-mode friendly | Capture local development builds, localhost browser tabs, and uninstalled app windows. |
 | Region markup | Draw one clear target region per screenshot so the issue is visible at a glance. |
+| Talk while you mark | Speak while you draw the box; Markup transcribes the note on-device. |
 | Multi-shot feedback | Add up to six screenshots to one feedback item for multi-state or responsive issues. |
 | Short recordings | Attach a focused screen recording when motion, timing, or interaction matters. |
 | App and browser routing | Route native apps by app identity and browser pages by local host, repository, Figma file, Google Doc, or host. |
@@ -45,7 +46,7 @@ That gives coding agents the same context a human reviewer would want: what app 
 
 1. Download the latest [DMG](https://github.com/rikuws/markup/releases/latest/download/markup-latest-macos.dmg) or [ZIP](https://github.com/rikuws/markup/releases/latest/download/markup-latest-macos.zip).
 2. Move `Markup.app` to `/Applications`.
-3. Launch Markup and grant Screen Recording permission when macOS asks.
+3. Launch Markup and grant Screen Recording permission when macOS asks. Microphone permission is requested on the first capture so you can talk while you mark.
 4. Open Settings to configure the hotkey, app routes, and the feedback inbox notch.
 
 Markup requires macOS 26 (Tahoe) or newer for its Liquid Glass selection UI. The first install comes from the DMG or ZIP; later signed releases can be installed from **Check for Updates**. Accessibility permission is useful for richer browser/page context and can be opened from Settings.
@@ -54,8 +55,8 @@ Markup requires macOS 26 (Tahoe) or newer for its Liquid Glass selection UI. The
 
 1. Focus the installed app, uninstalled dev build, or browser page you are reviewing.
 2. Press `Cmd+Shift+M` or choose **Capture Feedback** from the menu bar item.
-3. Draw a box around the issue.
-4. Add a note that says what should change.
+3. Draw a box around the issue and say what’s wrong — Markup listens while you mark.
+4. Edit the transcribed note if you want to, or type instead.
 5. Add extra screenshots or a short recording if one frame is not enough.
 6. Save the bundle to the configured project route.
 7. Ask your coding agent to process the pending Markup feedback.
@@ -165,7 +166,7 @@ Keep the private key only in release secrets.
 
 ## Privacy
 
-Markup does not upload captures. Screenshots, notes, metadata, and recordings are saved locally in the feedback directory for the configured route.
+Markup does not upload captures. Screenshots, notes, metadata, and recordings are saved locally in the feedback directory for the configured route. Spoken notes are transcribed on this Mac and are not sent to a network speech service.
 
 ## License
 

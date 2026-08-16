@@ -95,13 +95,19 @@ struct SettingsView: View {
     private var permissionsSection: some View {
         SettingsSection(
             title: "Permissions",
-            subtitle: "Markup needs screen capture access before the overlay can open."
+            subtitle: "Screen capture is required. Microphone is used to talk while you mark a screenshot."
         ) {
             HStack(spacing: 10) {
                 Button {
                     openPrivacyPane("Privacy_ScreenCapture")
                 } label: {
                     Label("Screen Recording", systemImage: "record.circle")
+                }
+
+                Button {
+                    openPrivacyPane("Privacy_Microphone")
+                } label: {
+                    Label("Microphone", systemImage: "mic")
                 }
 
                 Button {

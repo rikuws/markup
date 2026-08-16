@@ -41,7 +41,7 @@ final class CaptureCoordinator {
 
         if let recordingURL, let draft {
             draft.recordingURL = recordingURL
-            showAnnotation(for: draft, selectedShotID: nil, showsAppendBanner: draft.shots.count > 1)
+            presentAnnotation(for: draft, selectedShotID: nil, showsAppendBanner: draft.shots.count > 1)
             return
         }
 
@@ -83,7 +83,7 @@ final class CaptureCoordinator {
             route: settingsStore.route(for: captured.routeKey)
         )
         self.draft = draft
-        showAnnotation(for: draft, selectedShotID: draft.shots.first?.id, showsAppendBanner: false)
+        presentAnnotation(for: draft, selectedShotID: draft.shots.first?.id, showsAppendBanner: false)
     }
 
     private func appendShotToCurrentDraft() {
@@ -96,7 +96,7 @@ final class CaptureCoordinator {
         guard draft.canAddShot else {
             NSSound.beep()
             clearAppendMode()
-            showAnnotation(for: draft, selectedShotID: draft.shots.last?.id, showsAppendBanner: draft.shots.count > 1)
+            presentAnnotation(for: draft, selectedShotID: draft.shots.last?.id, showsAppendBanner: draft.shots.count > 1)
             return
         }
 
@@ -117,12 +117,38 @@ final class CaptureCoordinator {
         guard let shot = draft.append(captured: captured) else {
             NSSound.beep()
             clearAppendMode()
-            showAnnotation(for: draft, selectedShotID: draft.shots.last?.id, showsAppendBanner: draft.shots.count > 1)
+            presentAnnotation(for: draft, selectedShotID: draft.shots.last?.id, showsAppendBanner: draft.shots.count > 1)
             return
         }
 
         clearAppendMode()
-        showAnnotation(for: draft, selectedShotID: shot.id, showsAppendBanner: true)
+        presentAnnotation(for: draft, selectedShotID: shot.id, showsAppendBanner: true)
+    }
+
+    private func presentAnnotation(
+        for draft: FeedbackDraft,
+        selectedShotID: UUID?,
+        showsAppendBanner: Bool
+    ) {
+        let show = { [weak self] in
+            self?.showAnnotation(
+                for: draft,
+                selectedShotID: selectedShotID,
+                showsAppendBanner: showsAppendBanner
+            )
+        }
+
+        if NoteDictationController.needsMicrophonePrompt {
+            Task { @MainActor in
+                await NoteDictationController.requestMicrophoneAccessIfNeeded()
+                Task { await NoteDictationController.prewarm() }
+                show()
+            }
+            return
+        }
+
+        Task { await NoteDictationController.prewarm() }
+        show()
     }
 
     private func showAnnotation(
@@ -253,7 +279,7 @@ final class CaptureCoordinator {
                             self.showAlert(title: "Recording Failed", message: error.localizedDescription)
                         }
 
-                        self.showAnnotation(
+                        self.presentAnnotation(
                             for: draft,
                             selectedShotID: selectedShotID,
                             showsAppendBanner: draft.shots.count > 1
