@@ -1,9 +1,9 @@
 import AppKit
 
 /// Draws the area-selection chrome as a quiet glass layer: a hairline
-/// specular rim, a faint sheet of light, and small round handles. The
-/// look follows Apple's Liquid Glass restraint — separation comes from
-/// a soft shadow and a bright edge, not from glows or accent colors.
+/// rim, a faint sheet of light, and iOS-screenshot-style handles.
+/// Separation comes from a soft shadow and a bright edge, not from
+/// glows or accent colors.
 enum LiquidGlassSelectionRenderer {
     struct Style {
         var scale: CGFloat = 1
@@ -30,7 +30,7 @@ enum LiquidGlassSelectionRenderer {
         drawRim(rect: rect, radius: radius, scale: scale, in: context)
 
         if style.showsHandles {
-            drawHandles(rect: rect, radius: radius, scale: scale, in: context)
+            drawHandles(rect: rect, scale: scale, in: context)
         }
 
         if let dimensions, !dimensions.isEmpty {
@@ -70,7 +70,7 @@ enum LiquidGlassSelectionRenderer {
     }
 
     private static func cornerRadius(for rect: CGRect, scale: CGFloat) -> CGFloat {
-        min(12 * scale, max(6 * scale, min(rect.width, rect.height) / 9))
+        min(3 * scale, min(rect.width, rect.height) / 2)
     }
 
     private static func roundedPath(rect: CGRect, radius: CGFloat) -> CGPath {
@@ -138,74 +138,164 @@ enum LiquidGlassSelectionRenderer {
         stroke(path, color: NSColor.black.withAlphaComponent(0.22), width: 1.6 * scale, in: context)
         context.restoreGState()
 
-        stroke(path, color: NSColor.white.withAlphaComponent(0.85), width: 1.0 * scale, in: context)
-
-        let innerRect = rect.insetBy(dx: 1.0 * scale, dy: 1.0 * scale)
-        stroke(
-            roundedPath(rect: innerRect, radius: max(2, radius - 1.0 * scale)),
-            color: NSColor.white.withAlphaComponent(0.14),
-            width: 0.8 * scale,
-            in: context
-        )
-
-        context.saveGState()
-        let highlightBand = CGRect(
-            x: rect.minX - 2 * scale,
-            y: rect.midY,
-            width: rect.width + 4 * scale,
-            height: rect.height / 2 + 2 * scale
-        )
-        context.addRect(highlightBand)
-        context.clip()
-        stroke(path, color: NSColor.white.withAlphaComponent(0.55), width: 1.0 * scale, in: context)
-        context.restoreGState()
+        stroke(path, color: NSColor.white.withAlphaComponent(0.92), width: 1.25 * scale, in: context)
     }
 
-    /// Small round handles at the corners, sized like system crop handles.
-    private static func drawHandles(
-        rect: CGRect,
-        radius: CGFloat,
-        scale: CGFloat,
-        in context: CGContext
-    ) {
-        let minimum = 44 * scale
+    /// iOS screenshot crop handles: thick white L-brackets at the corners
+    /// and short bars at the midpoint of each side, sitting on the hairline.
+    private static func drawHandles(rect: CGRect, scale: CGFloat, in context: CGContext) {
+        let thickness = 5.5 * scale
+        let length = min(24 * scale, max(16 * scale, min(rect.width, rect.height) * 0.18))
+        let outerRadius = min(2.4 * scale, thickness * 0.45)
+        let minimum = length * 2 + thickness * 2
         guard rect.width >= minimum, rect.height >= minimum else { return }
 
-        let size = 8.5 * scale
-        let offset = radius * 0.29
-        let centers = [
-            CGPoint(x: rect.minX + offset, y: rect.minY + offset),
-            CGPoint(x: rect.maxX - offset, y: rect.minY + offset),
-            CGPoint(x: rect.maxX - offset, y: rect.maxY - offset),
-            CGPoint(x: rect.minX + offset, y: rect.maxY - offset)
-        ]
+        context.saveGState()
+        context.setFillColor(NSColor.white.cgColor)
+        context.setShadow(
+            offset: CGSize(width: 0, height: -0.6 * scale),
+            blur: 2.4 * scale,
+            color: NSColor.black.withAlphaComponent(0.22).cgColor
+        )
 
-        for center in centers {
-            drawHandleDot(at: center, size: size, scale: scale, in: context)
+        addCornerHandle(to: context, at: .bottomLeft, rect: rect, length: length, thickness: thickness, outerRadius: outerRadius)
+        addCornerHandle(to: context, at: .bottomRight, rect: rect, length: length, thickness: thickness, outerRadius: outerRadius)
+        addCornerHandle(to: context, at: .topRight, rect: rect, length: length, thickness: thickness, outerRadius: outerRadius)
+        addCornerHandle(to: context, at: .topLeft, rect: rect, length: length, thickness: thickness, outerRadius: outerRadius)
+
+        let midGap = length * 2.4
+        if rect.width >= midGap {
+            addEdgeHandle(to: context, at: .top, rect: rect, length: length, thickness: thickness)
+            addEdgeHandle(to: context, at: .bottom, rect: rect, length: length, thickness: thickness)
         }
+        if rect.height >= midGap {
+            addEdgeHandle(to: context, at: .left, rect: rect, length: length, thickness: thickness)
+            addEdgeHandle(to: context, at: .right, rect: rect, length: length, thickness: thickness)
+        }
+
+        context.restoreGState()
     }
 
-    private static func drawHandleDot(
-        at center: CGPoint,
-        size: CGFloat,
-        scale: CGFloat,
-        in context: CGContext
+    private enum Corner {
+        case bottomLeft, bottomRight, topRight, topLeft
+    }
+
+    private enum Edge {
+        case top, bottom, left, right
+    }
+
+    private static func addCornerHandle(
+        to context: CGContext,
+        at corner: Corner,
+        rect: CGRect,
+        length: CGFloat,
+        thickness: CGFloat,
+        outerRadius: CGFloat
     ) {
-        let dotRect = CGRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
+        let half = thickness / 2
+        let path = CGMutablePath()
 
-        context.saveGState()
-        context.setShadow(
-            offset: CGSize(width: 0, height: -0.8 * scale),
-            blur: 3 * scale,
-            color: NSColor.black.withAlphaComponent(0.35).cgColor
+        switch corner {
+        case .bottomLeft:
+            addLPath(
+                path,
+                outer: CGPoint(x: rect.minX, y: rect.minY),
+                alongX: 1,
+                alongY: 1,
+                length: length,
+                half: half,
+                outerRadius: outerRadius
+            )
+        case .bottomRight:
+            addLPath(
+                path,
+                outer: CGPoint(x: rect.maxX, y: rect.minY),
+                alongX: -1,
+                alongY: 1,
+                length: length,
+                half: half,
+                outerRadius: outerRadius
+            )
+        case .topRight:
+            addLPath(
+                path,
+                outer: CGPoint(x: rect.maxX, y: rect.maxY),
+                alongX: -1,
+                alongY: -1,
+                length: length,
+                half: half,
+                outerRadius: outerRadius
+            )
+        case .topLeft:
+            addLPath(
+                path,
+                outer: CGPoint(x: rect.minX, y: rect.maxY),
+                alongX: 1,
+                alongY: -1,
+                length: length,
+                half: half,
+                outerRadius: outerRadius
+            )
+        }
+
+        context.addPath(path)
+        context.fillPath()
+    }
+
+    /// Builds a filled L whose outer corner is rounded and whose inner
+    /// corner stays a sharp 90°. `alongX` / `alongY` are +1 or -1 and
+    /// point from the outer corner along each arm.
+    private static func addLPath(
+        _ path: CGMutablePath,
+        outer: CGPoint,
+        alongX: CGFloat,
+        alongY: CGFloat,
+        length: CGFloat,
+        half: CGFloat,
+        outerRadius: CGFloat
+    ) {
+        let nx = -alongX
+        let ny = -alongY
+        let r = min(outerRadius, half)
+
+        let outerOut = CGPoint(x: outer.x + nx * half, y: outer.y + ny * half)
+        let verticalEnd = CGPoint(x: outer.x, y: outer.y + alongY * length)
+        let horizontalEnd = CGPoint(x: outer.x + alongX * length, y: outer.y)
+
+        path.move(to: CGPoint(x: verticalEnd.x + nx * half, y: verticalEnd.y))
+        path.addLine(to: CGPoint(x: verticalEnd.x + alongX * half, y: verticalEnd.y))
+        path.addLine(to: CGPoint(x: outer.x + alongX * half, y: outer.y + alongY * half))
+        path.addLine(to: CGPoint(x: horizontalEnd.x, y: horizontalEnd.y + alongY * half))
+        path.addLine(to: CGPoint(x: horizontalEnd.x, y: horizontalEnd.y + ny * half))
+        path.addLine(to: CGPoint(x: outerOut.x + alongX * r, y: outerOut.y))
+        path.addQuadCurve(
+            to: CGPoint(x: outerOut.x, y: outerOut.y + alongY * r),
+            control: outerOut
         )
-        context.setFillColor(NSColor.white.cgColor)
-        context.fillEllipse(in: dotRect)
-        context.restoreGState()
+        path.closeSubpath()
+    }
 
-        context.setStrokeColor(NSColor.black.withAlphaComponent(0.10).cgColor)
-        context.setLineWidth(max(0.5, 0.6 * scale))
-        context.strokeEllipse(in: dotRect.insetBy(dx: 0.3 * scale, dy: 0.3 * scale))
+    private static func addEdgeHandle(
+        to context: CGContext,
+        at edge: Edge,
+        rect: CGRect,
+        length: CGFloat,
+        thickness: CGFloat
+    ) {
+        let handle: CGRect
+        switch edge {
+        case .top:
+            handle = CGRect(x: rect.midX - length / 2, y: rect.maxY - thickness / 2, width: length, height: thickness)
+        case .bottom:
+            handle = CGRect(x: rect.midX - length / 2, y: rect.minY - thickness / 2, width: length, height: thickness)
+        case .left:
+            handle = CGRect(x: rect.minX - thickness / 2, y: rect.midY - length / 2, width: thickness, height: length)
+        case .right:
+            handle = CGRect(x: rect.maxX - thickness / 2, y: rect.midY - length / 2, width: thickness, height: length)
+        }
+
+        context.addPath(CGPath(rect: handle, transform: nil))
+        context.fillPath()
     }
 
     private static func drawDimensionBadge(
