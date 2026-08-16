@@ -27,14 +27,17 @@ final class AnnotationCanvasView: NSView {
         )
     }
 
-    private var isSelectionOptional = false
     private var image: NSImage
     private var cgImage: CGImage
     private var dragStart: NSPoint?
     private let imageCornerRadius: CGFloat = 12
+    private let glassPane = PassthroughGlassView()
+    private let hintCapsule = PassthroughGlassView()
+    private let hintLabel = NSTextField(labelWithString: "")
     private var selectionRect: NSRect? {
         didSet {
             onSelectionChanged?()
+            updateOverlays()
         }
     }
 
@@ -43,6 +46,8 @@ final class AnnotationCanvasView: NSView {
         self.cgImage = image.bestCGImage()
         super.init(frame: .zero)
         wantsLayer = true
+        setupGlassPane()
+        setupHintCapsule()
     }
 
     required init?(coder: NSCoder) {
@@ -55,8 +60,8 @@ final class AnnotationCanvasView: NSView {
 
     func configure(image: NSImage, region: CaptureRegion?, isSelectionOptional: Bool = false) {
         self.image = image
-        self.isSelectionOptional = isSelectionOptional
         cgImage = image.bestCGImage()
+        hintLabel.stringValue = isSelectionOptional ? "Optional: select issue area" : "Select the issue area"
         setCaptureRegion(region)
     }
 
@@ -88,6 +93,8 @@ final class AnnotationCanvasView: NSView {
         super.layout()
         if let region = captureRegion {
             setCaptureRegion(region)
+        } else {
+            updateOverlays()
         }
     }
 
@@ -99,14 +106,9 @@ final class AnnotationCanvasView: NSView {
         guard imageRect.width > 0, imageRect.height > 0 else { return }
         drawImageFrame(in: imageRect)
 
-        guard let selection = selectionRect?.intersection(imageRect), !selection.isEmpty else {
-            drawImageScrim(in: imageRect, alpha: 0.28)
-            drawHint(in: imageRect)
-            return
+        if selectionRect?.intersection(imageRect).isEmpty != false {
+            drawImageScrim(in: imageRect, alpha: 0.22)
         }
-
-        dimOutside(selection, in: imageRect)
-        drawLiquidGlassSelection(selection, in: imageRect)
     }
 
     override func resetCursorRects() {
@@ -145,6 +147,7 @@ final class AnnotationCanvasView: NSView {
         if let selectionRect, selectionRect.width < 4 || selectionRect.height < 4 {
             self.selectionRect = nil
         } else if captureRegion != nil {
+            runBlobAnimation()
             onSelectionCompleted?()
         }
         needsDisplay = true
@@ -164,18 +167,6 @@ final class AnnotationCanvasView: NSView {
             width: size.width,
             height: size.height
         )
-    }
-
-    private func dimOutside(_ selection: NSRect, in imageRect: NSRect) {
-        NSGraphicsContext.saveGraphicsState()
-        NSBezierPath(roundedRect: imageRect, xRadius: imageCornerRadius, yRadius: imageCornerRadius).addClip()
-        NSColor.black.withAlphaComponent(0.46).setFill()
-
-        NSRect(x: imageRect.minX, y: imageRect.minY, width: imageRect.width, height: selection.minY - imageRect.minY).fill()
-        NSRect(x: imageRect.minX, y: selection.maxY, width: imageRect.width, height: imageRect.maxY - selection.maxY).fill()
-        NSRect(x: imageRect.minX, y: selection.minY, width: selection.minX - imageRect.minX, height: selection.height).fill()
-        NSRect(x: selection.maxX, y: selection.minY, width: imageRect.maxX - selection.maxX, height: selection.height).fill()
-        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawImageFrame(in imageRect: NSRect) {
@@ -209,27 +200,100 @@ final class AnnotationCanvasView: NSView {
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    private func drawLiquidGlassSelection(_ rect: NSRect, in imageRect: NSRect) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
+    // MARK: - Liquid Glass overlays
 
-        let dimensions = captureRegion.map { "\($0.width) × \($0.height)" }
-        LiquidGlassSelectionRenderer.drawSelection(
-            rect: rect,
-            in: context,
-            bounds: imageRect,
-            style: LiquidGlassSelectionRenderer.Style(
-                scale: 1,
-                showsHandles: true,
-                dimensions: dimensions
-            )
-        )
+    private func setupGlassPane() {
+        glassPane.style = .regular
+        glassPane.effectIsInteractive = true
+        glassPane.isHidden = true
+        addSubview(glassPane)
     }
 
-    private func drawHint(in imageRect: NSRect) {
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
+    private func setupHintCapsule() {
+        hintLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        hintLabel.textColor = .labelColor
+        hintLabel.alignment = .center
+        hintLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let hint = isSelectionOptional ? "Optional: select issue area" : "Select the issue area"
-        LiquidGlassSelectionRenderer.drawHint(hint, centeredIn: imageRect, in: context)
+        let content = NSView()
+        content.addSubview(hintLabel)
+        NSLayoutConstraint.activate([
+            hintLabel.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            hintLabel.centerYAnchor.constraint(equalTo: content.centerYAnchor)
+        ])
+
+        hintCapsule.style = .regular
+        hintCapsule.contentView = content
+        hintCapsule.isHidden = true
+        addSubview(hintCapsule)
+    }
+
+    /// Keeps the glass pane glued to the selection and the hint capsule
+    /// centered over the image when nothing is selected.
+    private func updateOverlays() {
+        let imageRect = aspectFitRect()
+        guard imageRect.width > 0, imageRect.height > 0 else {
+            glassPane.isHidden = true
+            hintCapsule.isHidden = true
+            return
+        }
+
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+
+        if let selection = selectionRect?.intersection(imageRect),
+           selection.width >= 2, selection.height >= 2 {
+            glassPane.frame = selection
+            glassPane.cornerRadius = min(26, min(selection.width, selection.height) / 2.5)
+            glassPane.isHidden = false
+            hintCapsule.isHidden = true
+        } else {
+            glassPane.isHidden = true
+            let size = hintLabel.intrinsicContentSize
+            let capsuleSize = NSSize(width: size.width + 34, height: size.height + 18)
+            hintCapsule.frame = NSRect(
+                x: imageRect.midX - capsuleSize.width / 2,
+                y: imageRect.midY - capsuleSize.height / 2,
+                width: capsuleSize.width,
+                height: capsuleSize.height
+            )
+            hintCapsule.cornerRadius = capsuleSize.height / 2
+            hintCapsule.isHidden = false
+        }
+
+        NSAnimationContext.endGrouping()
+    }
+
+    /// The fast gel settle when the pane is released: a quick squash and
+    /// counter-stretch around the pane's center, like liquid finding rest.
+    private func runBlobAnimation() {
+        guard !glassPane.isHidden, let layer = glassPane.layer else { return }
+
+        let bounds = glassPane.bounds
+        let animation = CAKeyframeAnimation(keyPath: "transform")
+        animation.values = [
+            CATransform3DIdentity,
+            Self.scaleAboutCenter(1.04, 0.955, bounds: bounds),
+            Self.scaleAboutCenter(0.982, 1.022, bounds: bounds),
+            Self.scaleAboutCenter(1.006, 0.994, bounds: bounds),
+            CATransform3DIdentity
+        ]
+        animation.keyTimes = [0, 0.28, 0.56, 0.8, 1]
+        animation.timingFunctions = [
+            CAMediaTimingFunction(name: .easeOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeInEaseOut),
+            CAMediaTimingFunction(name: .easeOut)
+        ]
+        animation.duration = 0.42
+        layer.removeAnimation(forKey: "blob")
+        layer.add(animation, forKey: "blob")
+    }
+
+    private static func scaleAboutCenter(_ sx: CGFloat, _ sy: CGFloat, bounds: CGRect) -> CATransform3D {
+        var transform = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
+        transform = CATransform3DScale(transform, sx, sy, 1)
+        return CATransform3DTranslate(transform, -bounds.midX, -bounds.midY, 0)
     }
 
     private func clamp(_ point: NSPoint, to rect: NSRect) -> NSPoint {
@@ -237,6 +301,14 @@ final class AnnotationCanvasView: NSView {
             x: min(max(point.x, rect.minX), rect.maxX),
             y: min(max(point.y, rect.minY), rect.maxY)
         )
+    }
+}
+
+/// Glass that never intercepts mouse events, so the canvas keeps
+/// receiving the drag while the pane floats above it.
+final class PassthroughGlassView: NSGlassEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
     }
 }
 

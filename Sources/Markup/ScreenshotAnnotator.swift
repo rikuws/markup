@@ -42,7 +42,7 @@ enum ScreenshotAnnotator {
     }
 
     private static func dimOutside(_ rect: CGRect, in context: CGContext, canvasSize: CGSize) {
-        context.setFillColor(NSColor.black.withAlphaComponent(0.42).cgColor)
+        context.setFillColor(NSColor.black.withAlphaComponent(0.30).cgColor)
         context.fill(CGRect(x: 0, y: 0, width: canvasSize.width, height: max(0, rect.minY)))
         context.fill(CGRect(x: 0, y: rect.maxY, width: canvasSize.width, height: max(0, canvasSize.height - rect.maxY)))
         context.fill(CGRect(x: 0, y: rect.minY, width: max(0, rect.minX), height: rect.height))
@@ -52,15 +52,6 @@ enum ScreenshotAnnotator {
     private static func drawLiquidGlassFocus(_ rect: CGRect, in context: CGContext, canvasSize: CGSize) {
         let shortest = min(canvasSize.width, canvasSize.height)
         let scale = max(1.15, min(2.4, shortest / 620))
-        LiquidGlassSelectionRenderer.drawSelection(
-            rect: rect,
-            in: context,
-            bounds: CGRect(origin: .zero, size: canvasSize),
-            style: LiquidGlassSelectionRenderer.Style(
-                scale: scale,
-                showsHandles: true,
-                dimensions: nil
-            )
-        )
+        LiquidGlassSelectionRenderer.drawPane(rect: rect, in: context, scale: scale)
     }
 }
