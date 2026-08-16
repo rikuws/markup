@@ -55,7 +55,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © 2026</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Markup can use microphone access when macOS dictation is used in the note field.</string>
+  <string>Markup listens while you mark a screenshot and transcribes the note on this Mac.</string>
   <key>NSScreenCaptureUsageDescription</key>
   <string>Markup captures screenshots and optional short recordings for local visual feedback tasks.</string>
 </dict>
@@ -84,13 +84,17 @@ fi
 
 markup_print_signing_choice "$SIGN_IDENTITY"
 
+ENTITLEMENTS="$ROOT/Sources/Markup/Markup.entitlements"
 SIGN_ARGS=(--force --deep --sign "$SIGN_IDENTITY")
+APP_SIGN_ARGS=("${SIGN_ARGS[@]}")
 if [[ "$SIGN_IDENTITY" != "-" ]]; then
   SIGN_ARGS+=(--options runtime --timestamp)
+  APP_SIGN_ARGS+=(--options runtime --timestamp)
 fi
+APP_SIGN_ARGS+=(--entitlements "$ENTITLEMENTS")
 
 codesign "${SIGN_ARGS[@]}" "$APP/Contents/Frameworks/Sparkle.framework"
-codesign "${SIGN_ARGS[@]}" "$APP"
+codesign "${APP_SIGN_ARGS[@]}" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP" >/dev/null
 
 echo "$APP"
