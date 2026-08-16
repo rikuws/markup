@@ -89,7 +89,12 @@ jobs:
             "$keychain_path"
           security find-identity -p codesigning -v
 
+      - name: Compile
+        if: github.event_name == 'pull_request'
+        run: swift build -c release
+
       - name: Build distributable package
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
 
@@ -124,6 +129,7 @@ jobs:
           ./scripts/notarize-sparkle-zip.sh "$zip"
 
       - name: Prepare release assets
+        if: github.event_name != 'pull_request'
         run: |
           set -euo pipefail
 
@@ -152,6 +158,7 @@ jobs:
           shasum -a 256 release-assets/* > release-assets/SHA256SUMS.txt
 
       - name: Upload CI artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: markup-macos

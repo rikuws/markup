@@ -18,7 +18,7 @@ if [[ "${MARKUP_ALLOW_DEVELOPMENT_PACKAGE:-0}" != "1" && -z "${MARKUP_SPARKLE_PU
   exit 1
 fi
 
-"$ROOT/scripts/build-app.sh" >/dev/null
+"$ROOT/scripts/build-app.sh"
 
 if [[ "${MARKUP_ALLOW_DEVELOPMENT_PACKAGE:-0}" != "1" ]]; then
   SIGN_DETAILS="$(codesign -dvv "$APP" 2>&1)"
@@ -45,7 +45,11 @@ ln -s /Applications "$STAGING/Applications"
 ditto -c -k --keepParent "$APP" "$ZIP"
 hdiutil create -volname "Markup" -srcfolder "$STAGING" -ov -format UDZO "$DMG" >/dev/null
 
-codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  codesign --force --sign "$SIGN_IDENTITY" "$DMG"
+else
+  codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG"
+fi
 codesign --verify --verbose=2 "$DMG" >/dev/null
 
 cat <<EOF
