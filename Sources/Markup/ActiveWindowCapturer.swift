@@ -43,12 +43,21 @@ final class ActiveWindowCapturer {
         )
     }
 
-    func ensureScreenCapturePermission() -> Bool {
-        if CGPreflightScreenCaptureAccess() {
-            return true
+    func screenCaptureAccess() -> ScreenCaptureAccess {
+        if DeveloperSession.isDebuggerAttached {
+            return .blockedByDebugger
         }
 
-        return CGRequestScreenCaptureAccess()
+        if CGPreflightScreenCaptureAccess() {
+            return .granted
+        }
+
+        // A successful prompt does not apply to this process. macOS requires a relaunch.
+        if CGRequestScreenCaptureAccess() {
+            return .needsRelaunch
+        }
+
+        return .denied
     }
 
     private func captureWindowImage(windowID: CGWindowID) -> NSImage? {

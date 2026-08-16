@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyManager: HotKeyManager?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        terminateOtherRunningInstances()
+        DeveloperSession.logLaunchWarnings()
+
         let coordinator = CaptureCoordinator(settingsStore: settingsStore)
         captureCoordinator = coordinator
 
@@ -77,5 +80,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let url = route.feedbackDirectoryURL
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         NSWorkspace.shared.open(url)
+    }
+
+    private func terminateOtherRunningInstances() {
+        let myPID = ProcessInfo.processInfo.processIdentifier
+        guard let bundleID = Bundle.main.bundleIdentifier, bundleID == "dev.rikuwikman.markup" else {
+            return
+        }
+
+        for app in NSWorkspace.shared.runningApplications {
+            guard app.bundleIdentifier == bundleID, app.processIdentifier != myPID else {
+                continue
+            }
+            app.terminate()
+        }
     }
 }

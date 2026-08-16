@@ -102,7 +102,20 @@ The skill lists feedback bundles, reads `instruction.md` and `metadata.json`, in
 
 ## Development
 
-Markup is a Swift Package Manager macOS app. There is no Xcode project required.
+Markup is a Swift Package Manager macOS app. For day-to-day Xcode work, open **`Markup.xcodeproj`** rather than `Package.swift`.
+
+Running the Swift package executable from Xcode launches an unpackaged, debugger-attached binary. macOS ties Screen Recording (and related TCC) grants to a stable code signature, and it will not give a working grant to a process Xcode is tracing. That is why the permission prompt comes back on every Run and capture still fails after you relaunch.
+
+### Run from Xcode
+
+1. Open `Markup.xcodeproj`.
+2. Select the Markup target → **Signing & Capabilities** → your Personal Team / Apple Development team. Ad-hoc “Sign to Run Locally” identities change on every build, so the prompt will not stick.
+3. Run the **Markup** scheme. It launches without the debugger so Screen Recording, microphone, and short recordings work after one grant and relaunch.
+4. Use **Markup Debug** only when you need breakpoints. Capture will refuse to run under the debugger and offer to relaunch without it.
+
+If System Settings already lists leftover Markup entries from earlier package runs, remove the extra ones and keep the signed `Markup.app`.
+
+Command-line builds still work without Xcode:
 
 ```bash
 swift package resolve
@@ -125,6 +138,7 @@ Useful paths:
 
 | Path | Purpose |
 | --- | --- |
+| [`Markup.xcodeproj`](Markup.xcodeproj) | Local Xcode app target with stable signing and a no-debugger Run scheme. |
 | [`Sources/Markup`](Sources/Markup) | AppKit and SwiftUI application source. |
 | [`Sources/Markup/Resources`](Sources/Markup/Resources) | App icon and menu bar assets. |
 | [`scripts`](scripts) | Build, package, signing, notarization, Sparkle, and release helpers. |

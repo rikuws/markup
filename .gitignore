@@ -2,6 +2,7 @@
 dist/
 .swiftpm/
 DerivedData/
+xcuserdata/
 *.xcuserstate
 *.p12
 sparkle_private_key*
