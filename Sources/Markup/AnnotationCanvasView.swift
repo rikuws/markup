@@ -204,7 +204,6 @@ final class AnnotationCanvasView: NSView {
 
     private func setupGlassPane() {
         glassPane.style = .regular
-        glassPane.effectIsInteractive = true
         glassPane.isHidden = true
         addSubview(glassPane)
     }
