@@ -63,6 +63,7 @@ final class AnnotationCanvasView: NSView {
     }
 
     func configure(image: NSImage, region: CaptureRegion?, isSelectionOptional: Bool = false) {
+        glassTuning.stopWave()
         self.image = image
         cgImage = image.bestCGImage()
         hintLabel.stringValue = isSelectionOptional ? "Optional: select issue area" : "Select the issue area"
@@ -127,6 +128,7 @@ final class AnnotationCanvasView: NSView {
         let imageRect = aspectFitRect()
         guard imageRect.contains(point) else { return }
 
+        glassTuning.stopWave()
         dragStart = point
         selectionRect = NSRect(origin: point, size: .zero)
         needsDisplay = true
@@ -151,7 +153,7 @@ final class AnnotationCanvasView: NSView {
         if let selectionRect, selectionRect.width < 4 || selectionRect.height < 4 {
             self.selectionRect = nil
         } else if captureRegion != nil {
-            runBlobAnimation()
+            runWaveAnimation(releasePoint: convert(event.locationInWindow, from: nil))
             onSelectionCompleted?()
         }
         needsDisplay = true
@@ -207,12 +209,15 @@ final class AnnotationCanvasView: NSView {
     // MARK: - Liquid Glass overlays
 
     private func setupGlassPane() {
-        // `.clear` Liquid Glass on a filled rounded rect — only the outer
-        // silhouette is beveled, so there is no inner bevel ring. A mask
-        // keeps a thin rim denser and leaves a faint interior so the pane
-        // reads as one sheet, not a hollow frame.
+        // `.clear` Liquid Glass on a filled silhouette — only the outer
+        // path is beveled, so there is no inner bevel ring. A mask keeps
+        // a thin rim denser and leaves a faint interior so the pane reads
+        // as one sheet, not a hollow frame. The hosting view is padded so
+        // a release wave can bulge past the selection without clipping.
         glassPane.sizingOptions = []
         glassPane.wantsLayer = true
+        glassPane.clipsToBounds = false
+        glassPane.layer?.masksToBounds = false
         glassPane.layer?.backgroundColor = NSColor.clear.cgColor
         glassPane.isHidden = true
         addSubview(glassPane)
@@ -257,7 +262,12 @@ final class AnnotationCanvasView: NSView {
             let cornerRadius = LiquidGlassSelectionRenderer.cornerRadius(
                 shortest: min(selection.width, selection.height)
             )
-            glassPane.frame = selection
+            // Pad the hosting view so a rim wave can bulge outside the
+            // selection without clipping the glass silhouette.
+            glassPane.frame = selection.insetBy(
+                dx: -SelectionGlassTuning.wavePad,
+                dy: -SelectionGlassTuning.wavePad
+            )
             if glassTuning.cornerRadius != cornerRadius {
                 glassTuning.cornerRadius = cornerRadius
             }
@@ -280,36 +290,29 @@ final class AnnotationCanvasView: NSView {
         NSAnimationContext.endGrouping()
     }
 
-    /// The fast gel settle when the pane is released: a quick squash and
-    /// counter-stretch around the pane's center, like liquid finding rest.
-    private func runBlobAnimation() {
-        guard !glassPane.isHidden, let layer = glassPane.layer else { return }
+    /// The liquid settle when the pane is released: the glass silhouette
+    /// itself ripples. A traveling wave runs around the rim from the
+    /// release point and damps out in about a second.
+    private func runWaveAnimation(releasePoint: NSPoint) {
+        guard !glassPane.isHidden else { return }
 
-        let bounds = glassPane.bounds
-        let animation = CAKeyframeAnimation(keyPath: "transform")
-        animation.values = [
-            CATransform3DIdentity,
-            Self.scaleAboutCenter(1.04, 0.955, bounds: bounds),
-            Self.scaleAboutCenter(0.982, 1.022, bounds: bounds),
-            Self.scaleAboutCenter(1.006, 0.994, bounds: bounds),
-            CATransform3DIdentity
-        ]
-        animation.keyTimes = [0, 0.28, 0.56, 0.8, 1]
-        animation.timingFunctions = [
-            CAMediaTimingFunction(name: .easeOut),
-            CAMediaTimingFunction(name: .easeInEaseOut),
-            CAMediaTimingFunction(name: .easeInEaseOut),
-            CAMediaTimingFunction(name: .easeOut)
-        ]
-        animation.duration = 0.42
-        layer.removeAnimation(forKey: "blob")
-        layer.add(animation, forKey: "blob")
-    }
+        let localPoint = glassPane.convert(releasePoint, from: self)
+        let origin = LiquidWaveShape.origin(
+            nearestTo: localPoint,
+            in: glassPane.bounds,
+            cornerRadius: glassTuning.cornerRadius,
+            pad: SelectionGlassTuning.wavePad
+        )
+        let shortest = max(
+            1,
+            min(glassPane.bounds.width, glassPane.bounds.height) - SelectionGlassTuning.wavePad * 2
+        )
+        let peak = min(9.5, shortest * 0.15, max(3.5, shortest * 0.055))
+        glassTuning.startWave(origin: origin, peak: peak)
 
-    private static func scaleAboutCenter(_ sx: CGFloat, _ sy: CGFloat, bounds: CGRect) -> CATransform3D {
-        var transform = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
-        transform = CATransform3DScale(transform, sx, sy, 1)
-        return CATransform3DTranslate(transform, -bounds.midX, -bounds.midY, 0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + SelectionGlassTuning.waveDuration + 0.12) { [weak self] in
+            self?.glassTuning.endWaveIfNeeded()
+        }
     }
 
     private func clamp(_ point: NSPoint, to rect: NSRect) -> NSPoint {
@@ -338,23 +341,73 @@ private final class PassthroughHostingView<Content: View>: NSHostingView<Content
 }
 
 private final class SelectionGlassTuning: ObservableObject {
+    static let wavePad: CGFloat = 14
+    static let waveDuration: TimeInterval = 0.98
+
     @Published var cornerRadius: CGFloat = LiquidGlassSelectionRenderer.cornerRadiusMax
+    @Published var waveOrigin: CGFloat = 0
+    @Published var wavePeak: CGFloat = 0
+    @Published var waveStartedAt: Date?
+
+    var isWaving: Bool { waveStartedAt != nil }
+
+    func startWave(origin: CGFloat, peak: CGFloat) {
+        waveOrigin = origin
+        wavePeak = peak
+        waveStartedAt = Date()
+    }
+
+    func stopWave() {
+        waveStartedAt = nil
+        wavePeak = 0
+    }
+
+    func endWaveIfNeeded() {
+        guard let start = waveStartedAt else { return }
+        if Date().timeIntervalSince(start) >= Self.waveDuration {
+            stopWave()
+        }
+    }
+
+    func wave(at now: Date) -> (amplitude: CGFloat, phase: CGFloat) {
+        guard let start = waveStartedAt else { return (0, 0) }
+        let time = max(0, now.timeIntervalSince(start))
+        guard time < Self.waveDuration else { return (0, 0) }
+
+        let progress = time / Self.waveDuration
+        let decay = pow(1 - progress, 1.3)
+        let phase = (1 - pow(1 - progress, 1.45)) * 1.08
+        return (wavePeak * decay, phase)
+    }
 }
 
-/// Clear Liquid Glass fitted to the selection. A filled rounded rect keeps
-/// bevels on the outer silhouette only; a mask thins the rim and leaves a
-/// faint interior so the pane stays one sheet of glass.
+/// Clear Liquid Glass fitted to the selection. The silhouette is a
+/// continuous rounded rect at rest; on release it becomes a LiquidWaveShape
+/// so the glass bevels travel with the rim wave.
 private struct SelectionGlassPane: View {
     @ObservedObject var tuning: SelectionGlassTuning
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: tuning.cornerRadius, style: .continuous)
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !tuning.isWaving)) { context in
+            let wave = tuning.wave(at: context.date)
+            pane(amplitude: wave.amplitude, phase: wave.phase)
+        }
+    }
 
-        Color.clear
+    private func pane(amplitude: CGFloat, phase: CGFloat) -> some View {
+        let shape = LiquidWaveShape(
+            cornerRadius: tuning.cornerRadius,
+            pad: SelectionGlassTuning.wavePad,
+            amplitude: amplitude,
+            phase: phase,
+            origin: tuning.waveOrigin
+        )
+
+        return Color.clear
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .glassEffect(.clear, in: shape)
             .mask {
-                GlassClearFadeMask(cornerRadius: tuning.cornerRadius)
+                GlassClearFadeMask(shape: shape)
             }
             .overlay {
                 shape.fill(Color.white.opacity(LiquidGlassSelectionRenderer.centerFill))
@@ -364,16 +417,17 @@ private struct SelectionGlassPane: View {
 }
 
 /// Stronger at the outer silhouette, then a short falloff to a faint
-/// interior. The glass shape stays a filled rounded rect (outer bevels
-/// only); this mask only controls how visible that glass is.
+/// interior. The glass shape stays a filled path (outer bevels only);
+/// this mask only controls how visible that glass is.
 private struct GlassClearFadeMask: View {
-    var cornerRadius: CGFloat
+    var shape: LiquidWaveShape
 
     var body: some View {
         GeometryReader { proxy in
-            let shortest = min(proxy.size.width, proxy.size.height)
-            let radius = min(cornerRadius, shortest / 2)
-            let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            let shortest = max(
+                1,
+                min(proxy.size.width, proxy.size.height) - SelectionGlassTuning.wavePad * 2
+            )
             let melt = LiquidGlassSelectionRenderer.meltDepth(shortest: shortest)
             let centerPunch = 1 - LiquidGlassSelectionRenderer.centerGlass
 
