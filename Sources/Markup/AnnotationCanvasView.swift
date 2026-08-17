@@ -203,7 +203,7 @@ final class AnnotationCanvasView: NSView {
     // MARK: - Liquid Glass overlays
 
     private func setupGlassPane() {
-        glassPane.style = .regular
+        glassPane.style = .clear
         glassPane.isHidden = true
         addSubview(glassPane)
     }
