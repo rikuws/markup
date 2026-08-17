@@ -1,0 +1,84 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver part to increment from the latest GitHub vX.Y.Z tag
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: create-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag and start release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push release tag
+        id: tag
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+
+          python3 skills/markup-release/scripts/release_markup.py "$BUMP" --repo "$GITHUB_WORKSPACE" --yes \
+            | tee "$RUNNER_TEMP/release-preview.txt"
+
+          next_tag="$(sed -n 's/^Next release tag: //p' "$RUNNER_TEMP/release-preview.txt" | tail -n 1)"
+          latest_tag="$(sed -n 's/^Latest GitHub version tag: //p' "$RUNNER_TEMP/release-preview.txt" | tail -n 1)"
+          target="$(sed -n 's/^Target commit: //p' "$RUNNER_TEMP/release-preview.txt" | tail -n 1)"
+
+          if [[ -z "$next_tag" ]]; then
+            echo "::error::Could not parse next release tag from the Markup release helper."
+            exit 1
+          fi
+
+          echo "tag=$next_tag" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Release tag created"
+            echo
+            echo "- Bump: \`$BUMP\`"
+            echo "- Previous tag: \`${latest_tag:-none}\`"
+            echo "- New tag: \`$next_tag\`"
+            echo "- Target: \`$target\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Start packaging workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          # Pushes authenticated with GITHUB_TOKEN do not start other workflows,
+          # so the tag-driven packaging job has to be dispatched explicitly.
+          gh workflow run release.yml --ref "$RELEASE_TAG"
+
+          {
+            echo "- Packaging workflow: [Build and Release](https://github.com/${GITHUB_REPOSITORY}/actions/workflows/release.yml) on \`$RELEASE_TAG\`"
+          } >> "$GITHUB_STEP_SUMMARY"
