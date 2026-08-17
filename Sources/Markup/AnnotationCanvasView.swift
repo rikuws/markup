@@ -208,12 +208,11 @@ final class AnnotationCanvasView: NSView {
 
     private func setupGlassPane() {
         // `.clear` Liquid Glass on a filled rounded rect — only the outer
-        // silhouette is beveled, so there is no inner bevel ring. A melt
-        // overlay then eases that glass color into the center.
+        // silhouette is beveled, so there is no inner bevel ring. A mask
+        // then drops the interior to clear after a short rim falloff.
         glassPane.sizingOptions = []
         glassPane.wantsLayer = true
         glassPane.layer?.backgroundColor = NSColor.clear.cgColor
-        glassPane.layer?.masksToBounds = false
         glassPane.isHidden = true
         addSubview(glassPane)
     }
@@ -340,29 +339,28 @@ private final class SelectionGlassTuning: ObservableObject {
 }
 
 /// Clear Liquid Glass fitted to the selection. A filled rounded rect keeps
-/// bevels on the outer silhouette only; the melt overlay washes that glass
-/// color inward so the rim eases into the center.
+/// bevels on the outer silhouette only; a mask melts that glass away after
+/// a short rim so most of the selection stays clear.
 private struct SelectionGlassPane: View {
     @ObservedObject var tuning: SelectionGlassTuning
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: tuning.cornerRadius, style: .continuous)
 
-        ZStack {
-            Color.clear
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .glassEffect(.clear, in: shape)
-
-            GlassMeltOverlay(cornerRadius: tuning.cornerRadius)
-        }
-        .allowsHitTesting(false)
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .glassEffect(.clear, in: shape)
+            .mask {
+                GlassClearFadeMask(cornerRadius: tuning.cornerRadius)
+            }
+            .allowsHitTesting(false)
     }
 }
 
-/// Soft glass-tint falloff from the rim into the center. Strokes sit just
-/// inside the outer bevel and are blurred so nothing reads as an inner
-/// border — the pane looks like the glass melted inward.
-private struct GlassMeltOverlay: View {
+/// Opaque at the outer silhouette, then a short falloff so the interior
+/// of the pane is fully clear. The glass shape stays a filled rounded
+/// rect (outer bevels only); this mask only controls where it is visible.
+private struct GlassClearFadeMask: View {
     var cornerRadius: CGFloat
 
     var body: some View {
@@ -370,23 +368,22 @@ private struct GlassMeltOverlay: View {
             let shortest = min(proxy.size.width, proxy.size.height)
             let radius = min(cornerRadius, shortest / 2)
             let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-            let meltDepth = max(28, min(shortest * 0.48, 100))
+            let melt = LiquidGlassSelectionRenderer.meltDepth(shortest: shortest)
 
-            ZStack {
-                shape.fill(Color.white.opacity(0.045))
-                shape.fill(Color.black.opacity(0.02))
-
-                shape
-                    .stroke(Color.white.opacity(0.22), lineWidth: meltDepth)
-                    .blur(radius: meltDepth * 0.36)
-                    .padding(2)
-                shape
-                    .stroke(Color.white.opacity(0.09), lineWidth: meltDepth * 1.7)
-                    .blur(radius: meltDepth * 0.7)
-                    .padding(2)
+            if shortest < melt * 2 + 8 {
+                shape.fill(Color.white)
+            } else {
+                shape.fill(Color.white)
+                    .overlay {
+                        shape
+                            .inset(by: melt)
+                            .fill(Color.black)
+                            .blur(radius: melt * 0.18)
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
             }
         }
-        .allowsHitTesting(false)
     }
 }
 
