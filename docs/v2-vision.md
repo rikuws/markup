@@ -4,6 +4,17 @@ Version 2.0 removes the separate screenshot editor. The same `Cmd+Shift+M` puts 
 
 This is a long work in progress. 1.x fixes keep landing on `main`; this branch (`cursor/v2-dev-0f86`) tracks 2.0 and merges `main` in regularly. Ship nothing from here until the live pipeline is at parity on routing and bundle output.
 
+## Implementation status
+
+The first cut of the whole pipeline is implemented on this branch and needs Mac feel-testing:
+
+- Live session: `LiveMarkupSession` + `LiveSelectionWindow`/`LiveSelectionView` (one transparent window per display, drag-to-create glass areas, caption chips with editable notes, floating HUD, Esc-mute/Esc-cancel/Return-save).
+- Per-area app detection: `AreaWindowResolver` (CGWindowList hit-test, majority vote over center + corners).
+- Save-time capture: `AreaCapturer` (owner window → display-rect → area-only fallbacks; Markup's windows excluded from every display capture).
+- Dictation retargeting: `NoteDictationController.beginNewTarget()` with volatile carryover dedup; latest area is the default target, click-to-retarget works via areas and chips.
+- Routing and output: per-area routes grouped into one bundle per route (`FeedbackBundleWriter`, metadata schema v4 with per-area notes; `instruction.md` keeps a combined "User note:" block for inbox compatibility).
+- Retired: `AnnotationWindowController`, `AnnotationCanvasView` (glass pane extracted to `SelectionGlass.swift`), `AppendCaptureHUDController`, `ActiveWindowCapturer`. `ScreenRecorder`/`RecordingProgressWindowController` are kept but unwired pending the recording decision below.
+
 ## What 1.x does today (what we are replacing)
 
 The 1.x pipeline is: hotkey → `ActiveWindowCapturer` screenshots the frontmost window via ScreenCaptureKit → `AnnotationWindowController` opens a borderless `.screenSaver` window showing **the screenshot** with dimmed chrome → the user draws one region per shot on the image, dictates a note, saves → `FeedbackBundleWriter` writes the bundle into the route's feedback folder.
