@@ -24,8 +24,6 @@ Do not end listening when the mouse goes up. People keep talking after the recta
 
 First-run Microphone permission must not appear on top of the overlay. Ask at first capture *before* the overlay, or from Settings. If the user declines, typing still works.
 
-Screen recordings stay silent (`captureMicrophone = false`). Tear the speech session down before “Record 10s”.
-
 ## Engine: SpeechAnalyzer, live, not WhisperKit
 
 Keyboard Dictation is the Globe/Fn IME. Skip it.
@@ -75,7 +73,7 @@ Rewrite `NSMicrophoneUsageDescription` to: Markup listens while you mark a scree
 3. `setContext` from capture metadata + OCR tokens.
 4. Consume `transcriber.results`: append finals, replace the trailing volatile span in `noteTextView` without stealing first responder from the canvas.
 5. Listening chip reflects detector / analyzer state. Mute finalizes through end of input; unmute starts a new session and appends.
-6. On Save / Cancel / Record, `finalizeAndFinish` or `cancelAndFinishNow`, stop capture, release the mic.
+6. On Save / Cancel, `finalizeAndFinish` or `cancelAndFinishNow`, stop capture, release the mic.
 
 Keep canvas first responder while listening. Gate overlay Escape (mute vs cancel) and do not let Save’s Return key equivalent fire during an active utterance.
 
@@ -88,7 +86,7 @@ Keep canvas first responder while listening. Gate overlay Escape (mute vs cancel
 | `Sources/Markup/NoteDictationController.swift` | Warm, listen, VAD, volatile/final text, mute. |
 | `Sources/Markup/ScreenshotTextIndex.swift` | One-shot Vision OCR → contextual phrases. |
 | `Sources/Markup/AnnotationWindowController.swift` | Auto-listen, chip, do not focus the note mid-speech, Escape gating. |
-| `Sources/Markup/CaptureCoordinator.swift` | Pre-warm on capture; stop dictation before recording. |
+| `Sources/Markup/CaptureCoordinator.swift` | Pre-warm on capture. |
 | `README.md` | Mark and talk; on-device; mic permission. |
 
 ## Mac test checklist
@@ -98,5 +96,4 @@ Keep canvas first responder while listening. Gate overlay Escape (mute vs cancel
 - Visible UI label (“Sign in”, a unique heading) is transcribed correctly more often with OCR context than without.
 - Escape mutes; second Escape cancels.
 - Clicking the note lets them edit without killing already-final text.
-- “Record 10s” after talking still writes a silent movie.
 - Notarized build prompts for Microphone once, then works offline for later captures (locale model already on disk).

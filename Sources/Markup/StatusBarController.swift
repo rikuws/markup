@@ -8,8 +8,7 @@ final class StatusBarController: NSObject {
     private let settingsStore: SettingsStore
     private let appUpdater: AppUpdater
     private let feedbackInbox = FeedbackInbox()
-    private let isAddingToCurrentFeedback: () -> Bool
-    private let isRecording: () -> Bool
+    private let isSessionActive: () -> Bool
     private let capture: () -> Void
     private let cancelCurrentFeedback: () -> Void
     private let openSettings: () -> Void
@@ -21,8 +20,7 @@ final class StatusBarController: NSObject {
     init(
         settingsStore: SettingsStore,
         appUpdater: AppUpdater,
-        isAddingToCurrentFeedback: @escaping () -> Bool,
-        isRecording: @escaping () -> Bool,
+        isSessionActive: @escaping () -> Bool,
         capture: @escaping () -> Void,
         cancelCurrentFeedback: @escaping () -> Void,
         openSettings: @escaping () -> Void,
@@ -31,15 +29,14 @@ final class StatusBarController: NSObject {
     ) {
         self.settingsStore = settingsStore
         self.appUpdater = appUpdater
-        self.isAddingToCurrentFeedback = isAddingToCurrentFeedback
-        self.isRecording = isRecording
+        self.isSessionActive = isSessionActive
         self.capture = capture
         self.cancelCurrentFeedback = cancelCurrentFeedback
         self.openSettings = openSettings
         self.openFeedbackFolder = openFeedbackFolder
         self.quit = quit
 
-        captureItem = NSMenuItem(title: "Capture Feedback", action: #selector(captureSelected), keyEquivalent: "")
+        captureItem = NSMenuItem(title: "Mark Up Screen", action: #selector(captureSelected), keyEquivalent: "")
         checkForUpdatesItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdatesSelected), keyEquivalent: "")
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
@@ -111,8 +108,8 @@ final class StatusBarController: NSObject {
         captureItem.isEnabled = true
         menu.addItem(captureItem)
 
-        if isAddingToCurrentFeedback() {
-            let cancelDraftItem = NSMenuItem(title: "Cancel Current Feedback", action: #selector(cancelCurrentFeedbackSelected), keyEquivalent: "")
+        if isSessionActive() {
+            let cancelDraftItem = NSMenuItem(title: "Cancel Live Markup", action: #selector(cancelCurrentFeedbackSelected), keyEquivalent: "")
             cancelDraftItem.target = self
             cancelDraftItem.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: nil)
             cancelDraftItem.isEnabled = true
@@ -272,20 +269,13 @@ final class StatusBarController: NSObject {
     }
 
     private func captureTitle() -> String {
-        if isRecording() {
-            return "Stop Recording"
-        }
-
-        return isAddingToCurrentFeedback()
-            ? "Add Shot to Current Feedback"
-            : "Capture Feedback"
+        isSessionActive()
+            ? "Show Live Markup"
+            : "Mark Up Screen"
     }
 
     private func captureImage() -> NSImage? {
-        NSImage(
-            systemSymbolName: isRecording() ? "stop.circle" : "viewfinder",
-            accessibilityDescription: nil
-        )
+        NSImage(systemSymbolName: "viewfinder", accessibilityDescription: nil)
     }
 
     @objc private func captureSelected() {

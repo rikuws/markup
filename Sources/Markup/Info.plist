@@ -29,6 +29,6 @@
   <key>NSMicrophoneUsageDescription</key>
   <string>Markup listens while you mark a screenshot and transcribes the note on this Mac.</string>
   <key>NSScreenCaptureUsageDescription</key>
-  <string>Markup captures screenshots and optional short recordings for local visual feedback tasks.</string>
+  <string>Markup captures screenshots of the areas you mark for local visual feedback tasks.</string>
 </dict>
 </plist>

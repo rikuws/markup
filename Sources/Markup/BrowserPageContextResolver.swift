@@ -35,7 +35,10 @@ enum BrowserPageContextResolver {
     ) -> BrowserPageContext? {
         guard isBrowser(bundleId) else { return nil }
 
-        let scriptPage = scriptPageContext(bundleId: bundleId)
+        let scriptPage = scriptPageContext(
+            bundleId: bundleId,
+            windowTitle: cleanWindowTitle(windowTitle, appName: appName)
+        )
         let accessibilityURL = accessibilityDocumentURL(for: app.processIdentifier)
         let url = firstNonEmpty(scriptPage?.url, accessibilityURL)
         let title = firstNonEmpty(scriptPage?.title, cleanWindowTitle(windowTitle, appName: appName), appName) ?? appName
@@ -82,12 +85,31 @@ enum BrowserPageContextResolver {
         "app.zen-browser.zen"
     ]
 
-    private static func scriptPageContext(bundleId: String) -> (url: String?, title: String?)? {
+    /// Looks up the page for a specific browser window by title, falling
+    /// back to the front tab. Live areas can sit on any browser window —
+    /// not just the frontmost one, which during a session is Markup itself.
+    private static func scriptPageContext(
+        bundleId: String,
+        windowTitle: String?
+    ) -> (url: String?, title: String?)? {
         let source: String?
+        let target = appleScriptLiteral(windowTitle ?? "")
 
         if safariBundleIds.contains(bundleId) {
             source = """
             tell application id "\(bundleId)"
+                set targetTitle to \(target)
+                if targetTitle is not "" then
+                    repeat with w in windows
+                        try
+                            set d to current tab of w
+                            set tabTitle to name of d
+                            if tabTitle is not "" and (tabTitle is targetTitle or targetTitle contains tabTitle) then
+                                return (URL of d) & linefeed & tabTitle
+                            end if
+                        end try
+                    end repeat
+                end if
                 if not (exists front document) then return ""
                 set pageURL to URL of front document
                 set pageTitle to name of front document
@@ -97,6 +119,18 @@ enum BrowserPageContextResolver {
         } else if chromiumBundleIds.contains(bundleId) {
             source = """
             tell application id "\(bundleId)"
+                set targetTitle to \(target)
+                if targetTitle is not "" then
+                    repeat with w in windows
+                        try
+                            set t to active tab of w
+                            set tabTitle to title of t
+                            if tabTitle is not "" and (tabTitle is targetTitle or targetTitle contains tabTitle) then
+                                return (URL of t) & linefeed & tabTitle
+                            end if
+                        end try
+                    end repeat
+                end if
                 if not (exists front window) then return ""
                 set activeTab to active tab of front window
                 set pageURL to URL of activeTab
@@ -230,6 +264,14 @@ enum BrowserPageContextResolver {
             }
         }
         return title
+    }
+
+    private static func appleScriptLiteral(_ value: String) -> String {
+        "\""
+            + value
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            + "\""
     }
 
     private static func firstNonEmpty(_ values: String?...) -> String? {
