@@ -86,8 +86,7 @@ final class FeedbackBundleWriter {
             capture: primaryItem.capture,
             assets: .init(
                 annotatedScreenshot: primaryItem.assets.annotatedScreenshot,
-                originalScreenshot: primaryItem.assets.originalScreenshot,
-                recording: nil
+                originalScreenshot: primaryItem.assets.originalScreenshot
             ),
             captures: items
         )

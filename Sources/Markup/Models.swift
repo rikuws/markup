@@ -238,7 +238,6 @@ struct FeedbackAssetNames {
     static let metadata = "metadata.json"
     static let annotatedScreenshot = "screenshot.png"
     static let originalScreenshot = "screenshot-original.png"
-    static let recording = "recording.mov"
 
     static func annotatedScreenshot(for index: Int) -> String {
         index <= 1 ? annotatedScreenshot : "screenshot-\(index).png"
@@ -275,7 +274,6 @@ struct FeedbackMetadata: Codable {
     struct AssetsMetadata: Codable {
         var annotatedScreenshot: String
         var originalScreenshot: String
-        var recording: String?
     }
 
     struct CaptureAssetsMetadata: Codable {

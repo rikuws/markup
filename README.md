@@ -22,7 +22,7 @@ Markup is a local-first macOS menu bar app for capturing UI feedback, marking th
 
 ## Why Markup?
 
-Screenshots in chat are easy to lose. Bug reports without pixels are easy to misunderstand. Markup keeps visual feedback where the code lives: every capture becomes a plain-file folder with an instruction, metadata, annotated screenshots, originals, and an optional short recording.
+Screenshots in chat are easy to lose. Bug reports without pixels are easy to misunderstand. Markup keeps visual feedback where the code lives: every capture becomes a plain-file folder with an instruction, metadata, annotated screenshots, and originals.
 
 That gives coding agents the same context a human reviewer would want: what app was captured, what window or browser page it came from, where the user pointed, what they wrote, and which project route should receive the fix.
 
@@ -94,7 +94,7 @@ Then ask:
 Use the Markup feedbacks skill to process the oldest pending feedback bundle in this repo.
 ```
 
-The skill lists feedback bundles, reads `instruction.md` and `metadata.json`, inspects screenshots and recordings, implements the fix, verifies it, and removes the bundle only after the work is done.
+The skill lists feedback bundles, reads `instruction.md` and `metadata.json`, inspects screenshots, implements the fix, verifies it, and removes the bundle only after the work is done.
 
 ## Development
 
@@ -106,7 +106,7 @@ Running the Swift package executable from Xcode launches an unpackaged, debugger
 
 1. Open `Markup.xcodeproj`.
 2. Select the Markup target → **Signing & Capabilities** → your Personal Team / Apple Development team. Ad-hoc “Sign to Run Locally” identities change on every build, so the prompt will not stick.
-3. Run the **Markup** scheme. It launches without the debugger so Screen Recording, microphone, and short recordings work after one grant and relaunch.
+3. Run the **Markup** scheme. It launches without the debugger so Screen Recording and microphone permissions work after one grant and relaunch.
 4. Use **Markup Debug** only when you need breakpoints. Capture will refuse to run under the debugger and offer to relaunch without it.
 
 If System Settings already lists leftover Markup entries from earlier package runs, remove the extra ones and keep the signed `Markup.app`.
@@ -179,7 +179,7 @@ Keep the private key only in release secrets.
 
 ## Privacy
 
-Markup does not upload captures. Screenshots, notes, metadata, and recordings are saved locally in the feedback directory for the configured route. Spoken notes are transcribed on this Mac and are not sent to a network speech service.
+Markup does not upload captures. Screenshots, notes, and metadata are saved locally in the feedback directory for the configured route. Spoken notes are transcribed on this Mac and are not sent to a network speech service.
 
 ## License
 

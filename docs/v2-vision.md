@@ -13,7 +13,7 @@ The first cut of the whole pipeline is implemented on this branch and needs Mac 
 - Save-time capture: `AreaCapturer` (owner window → display-rect → area-only fallbacks; Markup's windows excluded from every display capture).
 - Dictation retargeting: `NoteDictationController.beginNewTarget()` with volatile carryover dedup; latest area is the default target, click-to-retarget works via areas and chips.
 - Routing and output: per-area routes grouped into one bundle per route (`FeedbackBundleWriter`, metadata schema v4 with per-area notes; `instruction.md` keeps a combined "User note:" block for inbox compatibility).
-- Retired: `AnnotationWindowController`, `AnnotationCanvasView` (glass pane extracted to `SelectionGlass.swift`), `AppendCaptureHUDController`, `ActiveWindowCapturer`. `ScreenRecorder`/`RecordingProgressWindowController` are kept but unwired pending the recording decision below.
+- Retired: `AnnotationWindowController`, `AnnotationCanvasView` (glass pane extracted to `SelectionGlass.swift`), `AppendCaptureHUDController`, `ActiveWindowCapturer`, `ScreenRecorder`, `RecordingProgressWindowController`. There is no Record 10s in 2.0.
 
 ## What 1.x does today (what we are replacing)
 
@@ -77,7 +77,7 @@ Refinements to explore on this branch (deliberately open, in rough priority orde
 | `BrowserPageContextResolver.swift` | Resolve page context for a specific window, not just the frontmost tab. |
 | `RouteTargetResolver.swift` / `RoutePrompts` / `SettingsStore` | Unchanged in behavior; called per area at save time. |
 | `FeedbackBundleWriter.swift` | Group areas by route; one bundle per route per save. |
-| `ScreenRecorder.swift` / Record 10s | Undecided in the live model (see open questions). |
+| `ScreenRecorder.swift` / Record 10s | Retired. Live areas plus dictation replace the clip. |
 
 ## Open questions
 
@@ -85,7 +85,6 @@ Refinements to explore on this branch (deliberately open, in rough priority orde
 - **Screen changes during the session:** if the app under an area scrolls or navigates before save, the saved pixels differ from what the user marked. Consider snapshotting each area's pixels at mouse-up as the default, with live-at-save as the option — this needs real-Mac feel testing.
 - **Click-through:** while the session is active, should clicks outside any glass area pass through to the apps below (so you can reproduce a bug mid-session)? Powerful, but risks accidental interaction; probably a modifier-key escape hatch rather than the default.
 - **Where does the note text live visually?** No editor window means transcribed text needs a home: a small glass caption attached to each area is the current bet; must not cover the very pixels being discussed.
-- **Recording:** does "Record 10s" survive, and if so is it per-area or whole-display? Defer until the core loop works.
 - **Dictation targeting rule:** latest-area is the starting default; utterance-boundary switching and click-to-retarget are the candidates to test on a Mac before committing.
 
 All feel/latency questions (glass over live content, mic-to-first-word, retargeting mid-sentence) need a Mac on macOS 26 — same constraint as `docs/dictation.md`. This VM edits code and docs only.
