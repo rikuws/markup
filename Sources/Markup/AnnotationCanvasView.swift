@@ -253,7 +253,9 @@ final class AnnotationCanvasView: NSView {
 
         if let selection = selectionRect?.intersection(imageRect),
            selection.width >= 2, selection.height >= 2 {
-            let cornerRadius = min(26, min(selection.width, selection.height) / 2.5)
+            let cornerRadius = LiquidGlassSelectionRenderer.cornerRadius(
+                shortest: min(selection.width, selection.height)
+            )
             glassPane.frame = selection
             if glassTuning.cornerRadius != cornerRadius {
                 glassTuning.cornerRadius = cornerRadius
@@ -335,7 +337,7 @@ private final class PassthroughHostingView<Content: View>: NSHostingView<Content
 }
 
 private final class SelectionGlassTuning: ObservableObject {
-    @Published var cornerRadius: CGFloat = 16
+    @Published var cornerRadius: CGFloat = LiquidGlassSelectionRenderer.cornerRadiusMax
 }
 
 /// Clear Liquid Glass fitted to the selection. A filled rounded rect keeps

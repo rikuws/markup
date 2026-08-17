@@ -7,11 +7,19 @@ import AppKit
 /// bitmap, so exports get the same read — a short edge wash, a hairline
 /// rim, and an open center.
 enum LiquidGlassSelectionRenderer {
+    /// Outer corner radius. Liquid Glass bevels track this, so it stays
+    /// small — a tight silhouette rather than a chunky glass slab.
+    static let cornerRadiusMax: CGFloat = 8
+
     /// Rim depth as a fraction of the pane's shortest side. Kept small so
     /// most of the selection stays clear of glass.
-    static let meltFraction: CGFloat = 0.18
-    static let meltMin: CGFloat = 12
-    static let meltMax: CGFloat = 36
+    static let meltFraction: CGFloat = 0.07
+    static let meltMin: CGFloat = 4
+    static let meltMax: CGFloat = 12
+
+    static func cornerRadius(shortest: CGFloat, scale: CGFloat = 1) -> CGFloat {
+        min(cornerRadiusMax * scale, shortest / 2)
+    }
 
     static func meltDepth(shortest: CGFloat, scale: CGFloat = 1) -> CGFloat {
         max(meltMin * scale, min(shortest * meltFraction, meltMax * scale))
@@ -20,7 +28,7 @@ enum LiquidGlassSelectionRenderer {
     static func drawPane(rect: CGRect, in context: CGContext, scale: CGFloat = 1) {
         guard rect.width > 1, rect.height > 1 else { return }
 
-        let radius = min(28 * scale, min(rect.width, rect.height) / 2)
+        let radius = cornerRadius(shortest: min(rect.width, rect.height), scale: scale)
         let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
 
         context.saveGState()
