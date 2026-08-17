@@ -22,7 +22,7 @@ Markup is a local-first macOS menu bar app for capturing UI feedback, marking th
 
 ## Why Markup?
 
-Screenshots in chat are easy to lose. Bug reports without pixels are easy to misunderstand. Markup keeps visual feedback where the code lives: every capture becomes a plain-file folder with an instruction, metadata, annotated screenshots, originals, and an optional short recording.
+Screenshots in chat are easy to lose. Bug reports without pixels are easy to misunderstand. Markup keeps visual feedback where the code lives: every capture becomes a plain-file folder with an instruction, metadata, annotated screenshots, and originals.
 
 That gives coding agents the same context a human reviewer would want: what app was captured, what window or browser page it came from, where the user pointed, what they wrote, and which project route should receive the fix.
 
@@ -32,15 +32,14 @@ That gives coding agents the same context a human reviewer would want: what app 
 
 | Feature | What it does |
 | --- | --- |
-| Menu bar capture | Capture the active window from the menu bar or with the default `Cmd+Shift+M` hotkey. |
-| Dev-mode friendly | Capture local development builds, localhost browser tabs, and uninstalled app windows. |
-| Region markup | Draw one clear target region per screenshot so the issue is visible at a glance. |
-| Talk while you mark | Speak while you draw the box; Markup transcribes the note on-device. |
-| Multi-shot feedback | Add up to six screenshots to one feedback item for multi-state or responsive issues. |
-| Short recordings | Attach a focused screen recording when motion, timing, or interaction matters. |
-| App and browser routing | Route native apps by app identity and browser pages by local host, repository, Figma file, Google Doc, or host. |
+| Live on-screen markup | The default `Cmd+Shift+M` hotkey (or the menu bar item) puts Liquid Glass selection directly on the live screen — no screenshot editor, no dimmed overlay. |
+| Dev-mode friendly | Mark local development builds, localhost browser tabs, and uninstalled app windows. |
+| Multiple areas | Mark as many areas as you want, across apps and displays; each area gets its own note. |
+| Talk while you mark | Speak while you draw; dictation is transcribed on-device and always lands in the newest area (click an area to retarget). |
+| Save-time capture | Pixels are captured when you save, so you can reproduce the issue live while narrating it. |
+| Per-area routing | Each area detects the app it was drawn on and routes to that app's markup folder — native apps by identity, browser pages by local host, repository, Figma file, Google Doc, or host. |
 | Feedback inbox | Review pending feedback by project, open screenshots, edit notes, reveal folders, or move handled items to Trash. |
-| Agent-ready files | Save `instruction.md`, `metadata.json`, screenshots, originals, and optional `recording.mov` in the target repo. |
+| Agent-ready files | Save `instruction.md`, `metadata.json`, screenshots, and originals in the target repo — one bundle per route. |
 
 ## Install
 
@@ -53,13 +52,11 @@ Markup requires macOS 26 (Tahoe) or newer for its Liquid Glass selection UI. The
 
 ## Workflow
 
-1. Focus the installed app, uninstalled dev build, or browser page you are reviewing.
-2. Press `Cmd+Shift+M` or choose **Capture Feedback** from the menu bar item.
-3. Draw a box around the issue and say what’s wrong — Markup listens while you mark.
-4. Edit the transcribed note if you want to, or type instead.
-5. Add extra screenshots or a short recording if one frame is not enough.
-6. Save the bundle to the configured project route.
-7. Ask your coding agent to process the pending Markup feedback.
+1. Press `Cmd+Shift+M` or choose **Mark Up Screen** from the menu bar item. The screen stays live — glass selection renders directly on top of whatever is running.
+2. Drag a glass area over the issue and say what’s wrong — Markup listens while you mark.
+3. Drag more areas anywhere on the screen; new dictation always goes to the newest area. Click an existing area (or its caption chip) to add to its note, or type in the chip directly.
+4. Press Return or click Save. Each area's pixels are captured from the live screen, the app under each area is detected, and one bundle is written per project route — prompting for a folder the first time an app is seen, like before.
+5. Ask your coding agent to process the pending Markup feedback.
 
 The default feedback path is `.markup/feedback`, but each app or browser route can point at a different project root and relative feedback path.
 
@@ -76,10 +73,9 @@ Markup writes ordinary files so humans, scripts, and agents can all inspect the 
     screenshot-original.png
     screenshot-2.png
     screenshot-original-2.png
-    recording.mov
 ```
 
-`instruction.md` contains the user note, screenshots list, app/window/browser context, and done-when criteria. `metadata.json` stores structured capture data, route information, highlighted regions, asset names, and schema version. Extra screenshots and `recording.mov` appear only when attached.
+`instruction.md` contains the notes, the marked-area list, app/window/browser context, and done-when criteria. `metadata.json` stores structured capture data, route information, marked regions, per-area notes, asset names, and the schema version (v4 for live areas). Each marked area contributes one screenshot pair; areas on different apps save into separate bundles, one per route.
 
 ## Use With Coding Agents
 
@@ -98,7 +94,7 @@ Then ask:
 Use the Markup feedbacks skill to process the oldest pending feedback bundle in this repo.
 ```
 
-The skill lists feedback bundles, reads `instruction.md` and `metadata.json`, inspects screenshots and recordings, implements the fix, verifies it, and removes the bundle only after the work is done.
+The skill lists feedback bundles, reads `instruction.md` and `metadata.json`, inspects screenshots, implements the fix, verifies it, and removes the bundle only after the work is done.
 
 ## Development
 
@@ -110,7 +106,7 @@ Running the Swift package executable from Xcode launches an unpackaged, debugger
 
 1. Open `Markup.xcodeproj`.
 2. Select the Markup target → **Signing & Capabilities** → your Personal Team / Apple Development team. Ad-hoc “Sign to Run Locally” identities change on every build, so the prompt will not stick.
-3. Run the **Markup** scheme. It launches without the debugger so Screen Recording, microphone, and short recordings work after one grant and relaunch.
+3. Run the **Markup** scheme. It launches without the debugger so Screen Recording and microphone permissions work after one grant and relaunch.
 4. Use **Markup Debug** only when you need breakpoints. Capture will refuse to run under the debugger and offer to relaunch without it.
 
 If System Settings already lists leftover Markup entries from earlier package runs, remove the extra ones and keep the signed `Markup.app`.
@@ -143,11 +139,14 @@ Useful paths:
 | [`Sources/Markup/Resources`](Sources/Markup/Resources) | App icon and menu bar assets. |
 | [`scripts`](scripts) | Build, package, signing, notarization, Sparkle, and release helpers. |
 | [`.github/workflows/release.yml`](.github/workflows/release.yml) | GitHub Actions workflow for CI packages and tagged releases. |
+| [`.github/workflows/create-release.yml`](.github/workflows/create-release.yml) | Manual `major` / `minor` / `patch` bump that tags `main` and starts the release workflow. |
 | [`skills/markup-feedbacks`](skills/markup-feedbacks) | Agent workflow for consuming saved feedback bundles. |
 
 ## Releases
 
-Tagged releases are built by GitHub Actions. Pushing a `vX.Y.Z` tag triggers the macOS packaging workflow, signs and notarizes release artifacts, generates Sparkle update assets, uploads checksum files, and publishes latest DMG/ZIP aliases.
+Tagged releases are built by GitHub Actions. The usual path is **Actions → Create Release**: choose `major`, `minor`, or `patch`, then run the workflow. That uses the same helper as local releases to compute the next `vX.Y.Z` from the latest GitHub version tag, tags `main`, and starts the macOS packaging workflow.
+
+Pushing a `vX.Y.Z` tag yourself does the same packaging step. Either path signs and notarizes release artifacts, generates Sparkle update assets, uploads checksum files, and publishes latest DMG/ZIP aliases.
 
 Release signing expects these GitHub secrets:
 
@@ -180,7 +179,7 @@ Keep the private key only in release secrets.
 
 ## Privacy
 
-Markup does not upload captures. Screenshots, notes, metadata, and recordings are saved locally in the feedback directory for the configured route. Spoken notes are transcribed on this Mac and are not sent to a network speech service.
+Markup does not upload captures. Screenshots, notes, and metadata are saved locally in the feedback directory for the configured route. Spoken notes are transcribed on this Mac and are not sent to a network speech service.
 
 ## License
 

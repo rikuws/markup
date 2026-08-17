@@ -7,7 +7,9 @@ description: Release a new Markup macOS version by bumping the latest GitHub `vX
 
 Use this skill only for the Markup repo at `/Users/rikuwikman/Dev/markup` / `github.com:rikuws/markup`.
 
-The release workflow is tag-driven: pushing a `vX.Y.Z` tag to GitHub triggers `.github/workflows/release.yml`, which builds, signs, notarizes, generates Sparkle assets, and uploads the GitHub Release assets.
+The release workflow is tag-driven: creating a `vX.Y.Z` tag on `origin/main` starts `.github/workflows/release.yml`, which builds, signs, notarizes, generates Sparkle assets, and uploads the GitHub Release assets.
+
+Maintainers can also run **Actions → Create Release** (`.github/workflows/create-release.yml`) and choose `major`, `minor`, or `patch`. That workflow runs this same helper and then starts the packaging workflow on the new tag.
 
 ## Required Input
 

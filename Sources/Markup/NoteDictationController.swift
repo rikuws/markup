@@ -50,6 +50,7 @@ final class NoteDictationController {
     private var sessionID = UUID()
     private var contextualPhrases: [String] = []
     private var pendingStart = false
+    private var carryoverText = ""
 
     nonisolated static var hasMicrophoneAccess: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -80,6 +81,18 @@ final class NoteDictationController {
 
     func noteWasEdited(_ note: String) {
         committedText = note
+        volatileText = ""
+    }
+
+    /// Retargets the transcript stream to a new note (a new live area)
+    /// without stopping the analyzer. The caller has already committed the
+    /// in-flight volatile text into the outgoing target; it is remembered
+    /// here so that when the transcriber finalizes the same utterance, the
+    /// portion that already landed in the previous area is not duplicated
+    /// into the new one.
+    func beginNewTarget() {
+        carryoverText = volatileText
+        committedText = ""
         volatileText = ""
     }
 
@@ -274,17 +287,45 @@ final class NoteDictationController {
     private func handle(result: DictationTranscriber.Result, session: UUID) {
         guard sessionID == session, state == .listening else { return }
 
-        let text = String(result.text.characters)
+        var text = String(result.text.characters)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
 
         if result.isFinal {
+            // A retarget can land mid-utterance. The volatile head of this
+            // utterance was already committed to the previous target; strip
+            // it so only the continuation reaches the new one.
+            if !carryoverText.isEmpty {
+                text = Self.strippingCarryover(carryoverText, from: text)
+                carryoverText = ""
+                guard !text.isEmpty else {
+                    publishTranscript()
+                    return
+                }
+            }
             committedText = Self.join(committedText, text)
             volatileText = ""
         } else {
+            if !carryoverText.isEmpty {
+                text = Self.strippingCarryover(carryoverText, from: text)
+                guard !text.isEmpty else { return }
+            }
             volatileText = text
         }
         publishTranscript()
+    }
+
+    private static func strippingCarryover(_ carryover: String, from text: String) -> String {
+        let normalizedCarryover = carryover.lowercased()
+        let normalizedText = text.lowercased()
+        guard normalizedText.hasPrefix(normalizedCarryover) else {
+            // The final was re-decoded and no longer matches the committed
+            // volatile head; keep it whole rather than guess at a split.
+            return text
+        }
+
+        return String(text.dropFirst(carryover.count))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func applyContext() async {
@@ -351,6 +392,7 @@ final class NoteDictationController {
         speechDetector = nil
         analyzer = nil
         sessionID = UUID()
+        carryoverText = ""
 
         guard let analyzerToFinish else { return }
         Task {
