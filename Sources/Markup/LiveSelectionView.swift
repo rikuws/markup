@@ -710,7 +710,7 @@ final class SessionHUDView: NSGlassEffectView {
     }
 }
 
-final class ListeningChipButton: NSButton {
+final class ListeningChipButton: NSControl {
     enum Mode {
         case hidden
         case preparing
@@ -727,20 +727,51 @@ final class ListeningChipButton: NSButton {
         didSet { applyMode() }
     }
 
+    private let iconView = NSImageView()
+    private let titleLabel = NSTextField(labelWithString: "")
     private var pulseTimer: Timer?
     private var pulseOn = false
 
     init() {
         super.init(frame: .zero)
-        bezelStyle = .inline
-        isBordered = false
-        imagePosition = .imageLeading
-        font = .systemFont(ofSize: 11, weight: .semibold)
-        contentTintColor = .white
         wantsLayer = true
         layer?.cornerRadius = 10
         layer?.masksToBounds = true
         translatesAutoresizingMaskIntoConstraints = false
+        focusRingType = .none
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        setAccessibilityRole(.button)
+
+        iconView.symbolConfiguration = .init(pointSize: 10, weight: .semibold)
+        iconView.contentTintColor = .white
+        iconView.imageScaling = .scaleProportionallyDown
+        iconView.imageAlignment = .alignCenter
+        iconView.setContentHuggingPriority(.required, for: .horizontal)
+        iconView.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        titleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.lineBreakMode = .byClipping
+        titleLabel.setContentHuggingPriority(.required, for: .horizontal)
+
+        let content = NSStackView(views: [iconView, titleLabel])
+        content.translatesAutoresizingMaskIntoConstraints = false
+        content.orientation = .horizontal
+        content.alignment = .centerY
+        content.spacing = 4
+        content.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
+        addSubview(content)
+
+        NSLayoutConstraint.activate([
+            iconView.widthAnchor.constraint(equalToConstant: 12),
+            iconView.heightAnchor.constraint(equalToConstant: 12),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
         applyMode()
     }
 
@@ -752,9 +783,20 @@ final class ListeningChipButton: NSButton {
         pulseTimer?.invalidate()
     }
 
+    override var acceptsFirstResponder: Bool { false }
+
     override var intrinsicContentSize: NSSize {
-        let size = super.intrinsicContentSize
-        return NSSize(width: max(size.width, 88), height: 22)
+        let titleWidth = titleLabel.intrinsicContentSize.width
+        return NSSize(width: max(8 + 12 + 4 + titleWidth + 8, 88), height: 22)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        !isHidden && bounds.contains(point) ? self : nil
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isEnabled, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        sendAction(action, to: target)
     }
 
     private func applyMode() {
@@ -766,29 +808,34 @@ final class ListeningChipButton: NSButton {
 
         switch mode {
         case .hidden:
-            title = ""
-            image = nil
+            titleLabel.stringValue = ""
+            iconView.image = nil
             toolTip = nil
+            setAccessibilityLabel(nil)
             layer?.backgroundColor = NSColor.clear.cgColor
         case .preparing:
-            title = "Preparing"
-            image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
+            titleLabel.stringValue = "Preparing"
+            iconView.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
             toolTip = "Preparing on-device dictation"
+            setAccessibilityLabel("Preparing")
             layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
         case .listening:
-            title = "Listening"
-            image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)
+            titleLabel.stringValue = "Listening"
+            iconView.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)
             toolTip = "Click to mute. Escape also mutes."
+            setAccessibilityLabel("Listening")
             startPulse()
         case .muted:
-            title = "Muted"
-            image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil)
+            titleLabel.stringValue = "Muted"
+            iconView.image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil)
             toolTip = "Click to talk while you mark"
+            setAccessibilityLabel("Muted")
             layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
         case .unavailable:
-            title = "Mic off"
-            image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil)
+            titleLabel.stringValue = "Mic off"
+            iconView.image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil)
             toolTip = "Microphone permission is needed for talk-while-you-mark notes"
+            setAccessibilityLabel("Mic off")
             layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.55).cgColor
         }
 
