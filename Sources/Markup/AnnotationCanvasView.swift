@@ -209,7 +209,8 @@ final class AnnotationCanvasView: NSView {
     private func setupGlassPane() {
         // `.clear` Liquid Glass on a filled rounded rect — only the outer
         // silhouette is beveled, so there is no inner bevel ring. A mask
-        // then drops the interior to clear after a short rim falloff.
+        // keeps a thin rim denser and leaves a faint interior so the pane
+        // reads as one sheet, not a hollow frame.
         glassPane.sizingOptions = []
         glassPane.wantsLayer = true
         glassPane.layer?.backgroundColor = NSColor.clear.cgColor
@@ -341,8 +342,8 @@ private final class SelectionGlassTuning: ObservableObject {
 }
 
 /// Clear Liquid Glass fitted to the selection. A filled rounded rect keeps
-/// bevels on the outer silhouette only; a mask melts that glass away after
-/// a short rim so most of the selection stays clear.
+/// bevels on the outer silhouette only; a mask thins the rim and leaves a
+/// faint interior so the pane stays one sheet of glass.
 private struct SelectionGlassPane: View {
     @ObservedObject var tuning: SelectionGlassTuning
 
@@ -355,13 +356,16 @@ private struct SelectionGlassPane: View {
             .mask {
                 GlassClearFadeMask(cornerRadius: tuning.cornerRadius)
             }
+            .overlay {
+                shape.fill(Color.white.opacity(LiquidGlassSelectionRenderer.centerFill))
+            }
             .allowsHitTesting(false)
     }
 }
 
-/// Opaque at the outer silhouette, then a short falloff so the interior
-/// of the pane is fully clear. The glass shape stays a filled rounded
-/// rect (outer bevels only); this mask only controls where it is visible.
+/// Stronger at the outer silhouette, then a short falloff to a faint
+/// interior. The glass shape stays a filled rounded rect (outer bevels
+/// only); this mask only controls how visible that glass is.
 private struct GlassClearFadeMask: View {
     var cornerRadius: CGFloat
 
@@ -371,6 +375,7 @@ private struct GlassClearFadeMask: View {
             let radius = min(cornerRadius, shortest / 2)
             let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
             let melt = LiquidGlassSelectionRenderer.meltDepth(shortest: shortest)
+            let centerPunch = 1 - LiquidGlassSelectionRenderer.centerGlass
 
             if shortest < melt * 2 + 8 {
                 shape.fill(Color.white)
@@ -379,8 +384,8 @@ private struct GlassClearFadeMask: View {
                     .overlay {
                         shape
                             .inset(by: melt)
-                            .fill(Color.black)
-                            .blur(radius: melt * 0.18)
+                            .fill(Color.white.opacity(centerPunch))
+                            .blur(radius: melt * 0.28)
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
