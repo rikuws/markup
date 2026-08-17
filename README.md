@@ -143,11 +143,14 @@ Useful paths:
 | [`Sources/Markup/Resources`](Sources/Markup/Resources) | App icon and menu bar assets. |
 | [`scripts`](scripts) | Build, package, signing, notarization, Sparkle, and release helpers. |
 | [`.github/workflows/release.yml`](.github/workflows/release.yml) | GitHub Actions workflow for CI packages and tagged releases. |
+| [`.github/workflows/create-release.yml`](.github/workflows/create-release.yml) | Manual `major` / `minor` / `patch` bump that tags `main` and starts the release workflow. |
 | [`skills/markup-feedbacks`](skills/markup-feedbacks) | Agent workflow for consuming saved feedback bundles. |
 
 ## Releases
 
-Tagged releases are built by GitHub Actions. Pushing a `vX.Y.Z` tag triggers the macOS packaging workflow, signs and notarizes release artifacts, generates Sparkle update assets, uploads checksum files, and publishes latest DMG/ZIP aliases.
+Tagged releases are built by GitHub Actions. The usual path is **Actions → Create Release**: choose `major`, `minor`, or `patch`, then run the workflow. That uses the same helper as local releases to compute the next `vX.Y.Z` from the latest GitHub version tag, tags `main`, and starts the macOS packaging workflow.
+
+Pushing a `vX.Y.Z` tag yourself does the same packaging step. Either path signs and notarizes release artifacts, generates Sparkle update assets, uploads checksum files, and publishes latest DMG/ZIP aliases.
 
 Release signing expects these GitHub secrets:
 
