@@ -8,22 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		8A1B2C3D4E5F60718293A013 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 8A1B2C3D4E5F60718293A012 /* Sparkle */; };
-		8A1B2C3D4E5F60718293A014 /* Sparkle in Embed Frameworks */ = {isa = PBXBuildFile; productRef = 8A1B2C3D4E5F60718293A012 /* Sparkle */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		8A1B2C3D4E5F60718293A010 /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				8A1B2C3D4E5F60718293A014 /* Sparkle in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		8A1B2C3D4E5F60718293A003 /* Markup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Markup.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -34,32 +19,22 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				Markup.entitlements,
-				Resources,
 			);
 			target = 8A1B2C3D4E5F60718293A002 /* Markup */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		8A1B2C3D4E5F60718293A004 /* Markup */ = {
+		8A1B2C3D4E5F60718293A004 /* Sources/Markup */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				8A1B2C3D4E5F60718293A006 /* Exceptions for "Sources/Markup" folder in "Markup" target */,
 			);
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
 			path = Sources/Markup;
 			sourceTree = "<group>";
 		};
-		8A1B2C3D4E5F60718293A005 /* Resources */ = {
+		8A1B2C3D4E5F60718293A005 /* Sources/Markup/Resources */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			explicitFileTypes = {
-			};
-			explicitFolders = (
-			);
 			path = Sources/Markup/Resources;
 			sourceTree = "<group>";
 		};
@@ -80,8 +55,8 @@
 		8A1B2C3D4E5F60718293A015 = {
 			isa = PBXGroup;
 			children = (
-				8A1B2C3D4E5F60718293A004 /* Markup */,
-				8A1B2C3D4E5F60718293A005 /* Resources */,
+				8A1B2C3D4E5F60718293A004 /* Sources/Markup */,
+				8A1B2C3D4E5F60718293A005 /* Sources/Markup/Resources */,
 				8A1B2C3D4E5F60718293A016 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -105,15 +80,15 @@
 				8A1B2C3D4E5F60718293A00E /* Sources */,
 				8A1B2C3D4E5F60718293A00D /* Frameworks */,
 				8A1B2C3D4E5F60718293A00F /* Resources */,
-				8A1B2C3D4E5F60718293A010 /* Embed Frameworks */,
+				8A1B2C3D4E5F60718293A018 /* Embed Sparkle.framework */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				8A1B2C3D4E5F60718293A004 /* Markup */,
-				8A1B2C3D4E5F60718293A005 /* Resources */,
+				8A1B2C3D4E5F60718293A004 /* Sources/Markup */,
+				8A1B2C3D4E5F60718293A005 /* Sources/Markup/Resources */,
 			);
 			name = Markup;
 			packageProductDependencies = (
@@ -185,6 +160,25 @@
 			shellPath = /bin/sh;
 			shellScript = "if [ -z \"${DEVELOPMENT_TEAM:-}\" ]; then\n  echo \"warning: Select a Development Team in the Markup target Signing & Capabilities tab so Screen Recording permission survives rebuilds. Ad-hoc identities change on every Run.\"\nfi\n";
 		};
+		8A1B2C3D4E5F60718293A018 /* Embed Sparkle.framework */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Embed Sparkle.framework";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "/bin/bash \"${PROJECT_DIR}/scripts/embed-sparkle.sh\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -245,12 +239,15 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Sources/Markup/Markup.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = R48ND8Q8V9;
 				ENABLE_APP_SANDBOX = NO;
+				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sources/Markup/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -271,12 +268,15 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Sources/Markup/Markup.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = R48ND8Q8V9;
 				ENABLE_APP_SANDBOX = NO;
+				ENABLE_DEBUG_DYLIB = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
-				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sources/Markup/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

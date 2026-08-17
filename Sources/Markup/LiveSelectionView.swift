@@ -45,6 +45,7 @@ final class LiveSelectionView: NSView {
     private var dragStart: NSPoint?
     private var pressedAreaID: UUID?
     private var isDraggingSelection = false
+    private var cursorTrackingArea: NSTrackingArea?
     private var selectionRect: NSRect? {
         didSet { updatePreviewPane() }
     }
@@ -53,7 +54,7 @@ final class LiveSelectionView: NSView {
         self.session = session
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.backgroundColor = LiveSelectionWindow.hitTestFill.cgColor
         addSubview(previewPane)
         setupHintCapsule()
     }
@@ -70,15 +71,55 @@ final class LiveSelectionView: NSView {
         false
     }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .crosshair)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let cursorTrackingArea {
+            removeTrackingArea(cursorTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.cursorUpdate, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        cursorTrackingArea = area
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.crosshair.set()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.crosshair.set()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window else { return }
+        window.acceptsMouseMovedEvents = true
+        window.makeFirstResponder(self)
     }
 
     // MARK: - Mouse
 
     override func mouseDown(with event: NSEvent) {
         window?.makeKey()
+        window?.makeFirstResponder(self)
+        NSCursor.crosshair.set()
         let point = convert(event.locationInWindow, from: nil)
         dragStart = point
         isDraggingSelection = false

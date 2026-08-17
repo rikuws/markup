@@ -1,9 +1,18 @@
 import AppKit
 
-/// A borderless, fully transparent window that carries the live glass
-/// areas for one display. Key events are offered to the session first so
-/// Escape/Return work no matter where the mouse is.
+/// A borderless, fully transparent-looking window that carries the live
+/// glass areas for one display. Key events are offered to the session first
+/// so Escape/Return work no matter where the mouse is.
+///
+/// WindowServer hit-tests composited alpha, not AppKit's `hitTest(_:)`. A
+/// fully clear overlay therefore never sees `mouseDown` — the click lands
+/// in the app below, Markup (an accessory app) loses key status, and the
+/// crosshair snaps back. `hitTestFill` is invisible but non-zero so the
+/// drag stays in this window.
 final class LiveSelectionWindow: NSWindow {
+    /// Invisible as an overlay, but above WindowServer's zero-alpha skip.
+    static let hitTestFill = NSColor.black.withAlphaComponent(0.02)
+
     var onKeyEvent: ((NSEvent) -> Bool)?
 
     override var canBecomeKey: Bool { true }
@@ -40,6 +49,8 @@ final class LiveMarkupSession: NSResponder {
     private var isEditingActiveNote = false
     private var contextPhrases: [String] = []
     private var isEnded = false
+    private var becomeActiveObserver: NSObjectProtocol?
+    private var didPushCursor = false
 
     var isActive: Bool {
         !windows.isEmpty && !isEnded
@@ -60,7 +71,7 @@ final class LiveMarkupSession: NSResponder {
     func begin() {
         guard windows.isEmpty else { return }
 
-        NSApp.activate(ignoringOtherApps: true)
+        activateForSession()
 
         for screen in NSScreen.screens {
             let window = LiveSelectionWindow(
@@ -72,15 +83,19 @@ final class LiveMarkupSession: NSResponder {
             window.level = .screenSaver
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.isOpaque = false
-            window.backgroundColor = .clear
+            window.backgroundColor = LiveSelectionWindow.hitTestFill
             window.hasShadow = false
             window.isReleasedWhenClosed = false
+            window.acceptsMouseMovedEvents = true
+            window.isMovable = false
+            window.animationBehavior = .none
             window.onKeyEvent = { [weak self] event in
                 self?.handleKeyEvent(event) ?? false
             }
 
             let view = LiveSelectionView(session: self)
             window.contentView = view
+            window.initialFirstResponder = view
             window.setFrame(screen.frame, display: true)
 
             windows.append(window)
@@ -88,22 +103,22 @@ final class LiveMarkupSession: NSResponder {
         }
 
         installHUD()
+        startActivationObserver()
+        presentWindows()
 
-        for window in windows {
-            window.orderFrontRegardless()
+        // Activation is cooperative and often finishes on a later turn;
+        // makeKey() is a no-op until Markup is actually active.
+        DispatchQueue.main.async { [weak self] in
+            self?.presentWindows()
         }
-        keyWindowUnderMouse()?.makeKey()
 
         dictation.startListening()
         refreshAll()
     }
 
     func refocus() {
-        NSApp.activate(ignoringOtherApps: true)
-        for window in windows {
-            window.orderFrontRegardless()
-        }
-        keyWindowUnderMouse()?.makeKey()
+        activateForSession()
+        presentWindows()
     }
 
     /// Commits in-flight dictation, stops the mic, and hides every session
@@ -111,16 +126,15 @@ final class LiveMarkupSession: NSResponder {
     func suspendForSave() {
         commitAllVolatile()
         dictation.teardown()
+        popCrosshairIfNeeded()
         for window in windows {
             window.orderOut(nil)
         }
     }
 
     func resumeAfterFailedSave() {
-        for window in windows {
-            window.orderFrontRegardless()
-        }
-        keyWindowUnderMouse()?.makeKey()
+        activateForSession()
+        presentWindows()
         dictation.startListening()
         refreshAll()
     }
@@ -128,6 +142,8 @@ final class LiveMarkupSession: NSResponder {
     func end() {
         guard !isEnded else { return }
         isEnded = true
+        stopActivationObserver()
+        popCrosshairIfNeeded()
         dictation.teardown()
         for window in windows {
             window.orderOut(nil)
@@ -427,5 +443,63 @@ final class LiveMarkupSession: NSResponder {
     private func keyWindowUnderMouse() -> LiveSelectionWindow? {
         let mouse = NSEvent.mouseLocation
         return windows.first { $0.frame.contains(mouse) } ?? windows.first
+    }
+
+    private func activateForSession() {
+        NSApp.activate(ignoringOtherApps: true)
+        _ = NSRunningApplication.current.activate(options: [.activateIgnoringOtherApps])
+    }
+
+    private func presentWindows() {
+        guard !isEnded else { return }
+
+        for window in windows {
+            window.orderFrontRegardless()
+        }
+
+        // Don't steal key (and the chip field editor) if a session panel
+        // already has it — didBecomeActive retries this path.
+        if windows.contains(where: { $0.isKeyWindow }) {
+            pushCrosshairIfNeeded()
+            return
+        }
+
+        guard let window = keyWindowUnderMouse() else { return }
+        window.makeKeyAndOrderFront(nil)
+        if let view = window.contentView as? LiveSelectionView {
+            window.makeFirstResponder(view)
+            window.invalidateCursorRects(for: view)
+        }
+        pushCrosshairIfNeeded()
+    }
+
+    private func startActivationObserver() {
+        guard becomeActiveObserver == nil else { return }
+        becomeActiveObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification,
+            object: NSApp,
+            queue: .main
+        ) { [weak self] _ in
+            self?.presentWindows()
+        }
+    }
+
+    private func stopActivationObserver() {
+        if let becomeActiveObserver {
+            NotificationCenter.default.removeObserver(becomeActiveObserver)
+            self.becomeActiveObserver = nil
+        }
+    }
+
+    private func pushCrosshairIfNeeded() {
+        guard !didPushCursor else { return }
+        NSCursor.crosshair.push()
+        didPushCursor = true
+    }
+
+    private func popCrosshairIfNeeded() {
+        guard didPushCursor else { return }
+        NSCursor.pop()
+        didPushCursor = false
     }
 }
