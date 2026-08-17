@@ -19,8 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let status = StatusBarController(
             settingsStore: settingsStore,
             appUpdater: appUpdater,
-            isAddingToCurrentFeedback: { coordinator.isAddingToCurrentFeedback },
-            isRecording: { coordinator.isRecording },
+            isSessionActive: { coordinator.isSessionActive },
             capture: { coordinator.captureFeedback() },
             cancelCurrentFeedback: { coordinator.cancelCurrentFeedback() },
             openSettings: { [weak self] in self?.showSettings() },
@@ -33,10 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         topNotch.start()
         topNotchController = topNotch
 
-        coordinator.onAppendModeChanged = { [weak status] _ in
-            status?.refreshCaptureItemState()
-        }
-        coordinator.onRecordingStateChanged = { [weak status] _ in
+        coordinator.onSessionStateChanged = { [weak status] _ in
             status?.refreshCaptureItemState()
         }
 

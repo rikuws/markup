@@ -1,137 +1,63 @@
 import AppKit
 
+/// Owns the live markup session and the save pipeline. 2.0 inverts the 1.x
+/// order: the hotkey opens a live glass session immediately (no capture),
+/// and pixels are read from the screen only when the user saves — one
+/// capture per area, grouped into one feedback bundle per route.
 final class CaptureCoordinator {
-    var onAppendModeChanged: ((Bool) -> Void)?
-    var onRecordingStateChanged: ((Bool) -> Void)?
+    var onSessionStateChanged: ((Bool) -> Void)?
 
-    var isAddingToCurrentFeedback: Bool {
-        isArmedForAdditionalShot
-    }
-
-    var isRecording: Bool {
-        recorder.isRecording || recordingProgressController != nil
+    var isSessionActive: Bool {
+        session?.isActive == true
     }
 
     private let settingsStore: SettingsStore
-    private let capturer = ActiveWindowCapturer()
+    private let capturer = AreaCapturer()
     private let bundleWriter = FeedbackBundleWriter()
-    private let recorder = ScreenRecorder()
-    private var overlayController: AnnotationWindowController?
-    private var recordingProgressController: RecordingProgressWindowController?
-    private var appendHUDController: AppendCaptureHUDController?
-    private var draft: FeedbackDraft?
-    private var shouldStopRecordingWhenStarted = false
-    private var isArmedForAdditionalShot = false {
-        didSet {
-            guard oldValue != isArmedForAdditionalShot else { return }
-            onAppendModeChanged?(isArmedForAdditionalShot)
-        }
-    }
-    private let recordingDuration: TimeInterval = 10
+    private var session: LiveMarkupSession?
 
     init(settingsStore: SettingsStore) {
         self.settingsStore = settingsStore
     }
 
-    func captureFeedback(recordingURL: URL? = nil) {
-        if recordingURL == nil, isRecording {
-            stopActiveRecording()
+    /// Hotkey and menu entry point: starts a session, or brings the current
+    /// one back to the front.
+    func captureFeedback() {
+        if let session, session.isActive {
+            session.refocus()
             return
         }
 
-        if let recordingURL, let draft {
-            draft.recordingURL = recordingURL
-            presentAnnotation(for: draft, selectedShotID: nil, showsAppendBanner: draft.shots.count > 1)
-            return
-        }
-
-        if let overlayController {
-            overlayController.refocusIfVisible()
-            return
-        }
-
-        if isArmedForAdditionalShot {
-            appendShotToCurrentDraft()
-        } else {
-            startNewDraft()
-        }
+        startSession()
     }
 
     func cancelCurrentFeedback() {
-        overlayController?.close()
-        overlayController = nil
-        draft = nil
-        clearAppendMode()
+        session?.end()
+        clearSession()
     }
 
-    private func startNewDraft() {
+    // MARK: - Session lifecycle
+
+    private func startSession() {
         guard ensureCaptureAccess() else { return }
 
-        guard let captured = capturer.captureActiveWindow() else {
-            showAlert(
-                title: "Could Not Capture Screen",
-                message: "Focus the app window and try again. If this keeps happening, check Screen Recording and Accessibility permissions for Markup."
-            )
-            return
+        let session = LiveMarkupSession(capturer: capturer)
+        session.onSaveRequested = { [weak self] in
+            self?.saveSession()
         }
-
-        let draft = FeedbackDraft(
-            primaryCapture: captured,
-            route: settingsStore.route(for: captured.routeKey)
-        )
-        self.draft = draft
-        presentAnnotation(for: draft, selectedShotID: draft.shots.first?.id, showsAppendBanner: false)
-    }
-
-    private func appendShotToCurrentDraft() {
-        guard let draft else {
-            clearAppendMode()
-            startNewDraft()
-            return
+        session.onCancelled = { [weak self] in
+            self?.clearSession()
         }
+        self.session = session
 
-        guard draft.canAddShot else {
-            NSSound.beep()
-            clearAppendMode()
-            presentAnnotation(for: draft, selectedShotID: draft.shots.last?.id, showsAppendBanner: draft.shots.count > 1)
-            return
-        }
-
-        guard ensureCaptureAccess() else { return }
-
-        guard let captured = capturer.captureActiveWindow() else {
-            showAlert(
-                title: "Could Not Add Screenshot",
-                message: "Focus the app window and press the Markup hotkey again."
-            )
-            showAppendHUD(for: draft)
-            return
-        }
-
-        guard let shot = draft.append(captured: captured) else {
-            NSSound.beep()
-            clearAppendMode()
-            presentAnnotation(for: draft, selectedShotID: draft.shots.last?.id, showsAppendBanner: draft.shots.count > 1)
-            return
-        }
-
-        clearAppendMode()
-        presentAnnotation(for: draft, selectedShotID: shot.id, showsAppendBanner: true)
-    }
-
-    private func presentAnnotation(
-        for draft: FeedbackDraft,
-        selectedShotID: UUID?,
-        showsAppendBanner: Bool
-    ) {
         let show = { [weak self] in
-            self?.showAnnotation(
-                for: draft,
-                selectedShotID: selectedShotID,
-                showsAppendBanner: showsAppendBanner
-            )
+            guard let self, self.session === session else { return }
+            session.begin()
+            self.onSessionStateChanged?(true)
         }
 
+        // First-run microphone permission must not appear on top of the
+        // session; ask before the glass goes up.
         if NoteDictationController.needsMicrophonePrompt {
             Task { @MainActor in
                 await NoteDictationController.requestMicrophoneAccessIfNeeded()
@@ -145,229 +71,102 @@ final class CaptureCoordinator {
         show()
     }
 
-    private func showAnnotation(
-        for draft: FeedbackDraft,
-        selectedShotID: UUID?,
-        showsAppendBanner: Bool
-    ) {
-        appendHUDController?.close()
-        appendHUDController = nil
-
-        let controller = AnnotationWindowController(
-            draft: draft,
-            selectedShotID: selectedShotID,
-            showsAppendBanner: showsAppendBanner,
-            onSave: { [weak self, weak draft] in
-                guard let draft else { return }
-                self?.saveFeedback(draft: draft)
-            },
-            onChangeRoute: { [weak self, weak draft] existingRoute in
-                guard let self, let draft else { return nil }
-                let updatedRoute = self.changeRoute(
-                    for: draft.primaryCapture,
-                    existingRoute: existingRoute
-                )
-                draft.route = updatedRoute
-                return updatedRoute
-            },
-            onCancel: { [weak self, weak draft] in
-                guard let self else { return }
-                if self.draft === draft {
-                    self.draft = nil
-                }
-                self.clearAppendMode()
-                self.overlayController = nil
-            },
-            onRecord: { [weak self, weak draft] selectedShotID in
-                guard let draft else { return }
-                self?.recordClip(for: draft, selectedShotID: selectedShotID)
-            },
-            onAddShot: { [weak self, weak draft] in
-                guard let draft else { return }
-                self?.beginAddingShot(to: draft)
-            }
-        )
-
-        let previousOverlayController = overlayController
-        overlayController = controller
-        previousOverlayController?.close()
-        controller.show()
+    private func clearSession() {
+        session = nil
+        onSessionStateChanged?(false)
     }
 
-    private func beginAddingShot(to draft: FeedbackDraft) {
-        guard draft.canAddShot else {
-            NSSound.beep()
-            return
-        }
+    // MARK: - Save
 
-        overlayController?.close()
-        overlayController = nil
-        isArmedForAdditionalShot = true
-        showAppendHUD(for: draft)
-
-        NSRunningApplication(processIdentifier: draft.primaryCapture.processIdentifier)?
-            .activate(options: [.activateIgnoringOtherApps])
-    }
-
-    private func showAppendHUD(for draft: FeedbackDraft) {
-        appendHUDController?.close()
-        appendHUDController = AppendCaptureHUDController(
-            shotIndex: draft.nextShotIndex,
-            hotKeyDisplay: settingsStore.settings.hotKey.normalized.displayString
-        )
-        appendHUDController?.show()
-    }
-
-    private func clearAppendMode() {
-        appendHUDController?.close()
-        appendHUDController = nil
-        isArmedForAdditionalShot = false
-    }
-
-    private func recordClip(for draft: FeedbackDraft, selectedShotID: UUID?) {
-        overlayController?.close()
-        overlayController = nil
-
-        let selectedCapture = selectedShotID
-            .flatMap { id in draft.shots.first(where: { $0.id == id })?.captured }
-            ?? draft.primaryCapture
-        NSRunningApplication(processIdentifier: selectedCapture.processIdentifier)?
-            .activate(options: [.activateIgnoringOtherApps])
-
-        let hotKeyDisplay = settingsStore.settings.hotKey.normalized.displayString
-        let progressController = RecordingProgressWindowController(
-            duration: recordingDuration,
-            stopShortcutDisplay: hotKeyDisplay
-        )
-        recordingProgressController = progressController
-        progressController.show()
-        onRecordingStateChanged?(true)
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self, weak draft] in
-            guard let self, let draft else { return }
-
-            self.recorder.record(
-                duration: self.recordingDuration,
-                onStarted: {
-                    DispatchQueue.main.async {
-                        progressController.markStarted()
-                        if self.shouldStopRecordingWhenStarted {
-                            self.shouldStopRecordingWhenStarted = false
-                            progressController.markStopping()
-                            self.recorder.stop()
-                        }
-                    }
-                },
-                completion: { [weak self, weak draft] result in
-                    DispatchQueue.main.async {
-                        guard let self, let draft else { return }
-                        self.shouldStopRecordingWhenStarted = false
-                        self.recordingProgressController?.close()
-                        self.recordingProgressController = nil
-                        self.onRecordingStateChanged?(false)
-
-                        switch result {
-                        case .success(let url):
-                            draft.recordingURL = url
-                        case .failure(let error):
-                            self.showAlert(title: "Recording Failed", message: error.localizedDescription)
-                        }
-
-                        self.presentAnnotation(
-                            for: draft,
-                            selectedShotID: selectedShotID,
-                            showsAppendBanner: draft.shots.count > 1
-                        )
-                    }
-                }
-            )
-        }
-    }
-
-    private func stopActiveRecording() {
-        guard isRecording else { return }
-
-        shouldStopRecordingWhenStarted = true
-        recordingProgressController?.markStopping()
-        if recorder.isRecording {
-            recorder.stop()
-        }
-    }
-
-    private func saveFeedback(draft: FeedbackDraft) {
+    private func saveSession() {
+        guard let session else { return }
+        let draft = session.draft
         guard draft.isComplete else {
             NSSound.beep()
             return
         }
 
-        guard let route = routeForSave(draft.primaryCapture) else {
-            overlayController?.show()
-            return
-        }
-        draft.route = route
+        // Hide the glass and stop the mic before touching the screen; the
+        // capture filter also excludes Markup's windows as a second guard.
+        session.suspendForSave()
 
+        var captures: [AreaCapture] = []
+        for area in draft.areas {
+            guard let capture = capturer.capture(area: area) else {
+                showAlert(
+                    title: "Could Not Capture Area \(draft.index(of: area))",
+                    message: "The screen under this area could not be captured. Check Screen Recording permission for Markup and try again."
+                )
+                session.resumeAfterFailedSave()
+                return
+            }
+            captures.append(capture)
+        }
+
+        // Resolve every route before writing anything, prompting for
+        // unknown apps. Cancelling any prompt aborts the save and returns
+        // to the live session.
+        let groups = draft.areasByRoute()
+        var routes: [String: AppRoute] = [:]
+        for group in groups {
+            let name = group.areas.first?.routeName ?? "Desktop"
+            guard let route = routeForSave(key: group.routeKey, name: name) else {
+                session.resumeAfterFailedSave()
+                return
+            }
+            routes[group.routeKey] = route
+        }
+
+        var savedURLs: [URL] = []
         do {
-            let url = try bundleWriter.write(draft: draft, route: route)
-            NSLog("Markup: saved feedback bundle to \(url.path)")
-            NSSound(named: "Glass")?.play()
-            NSWorkspace.shared.noteFileSystemChanged(url.path)
+            for group in groups {
+                guard let route = routes[group.routeKey] else { continue }
+                let groupCaptures = captures.filter { capture in
+                    group.areas.contains { $0.id == capture.area.id }
+                }
+                let url = try bundleWriter.write(captures: groupCaptures, route: route)
+                savedURLs.append(url)
+            }
         } catch {
             showAlert(title: "Could Not Save Feedback", message: error.localizedDescription)
+            session.resumeAfterFailedSave()
             return
         }
 
-        overlayController?.close()
-        overlayController = nil
-        self.draft = nil
-        clearAppendMode()
-        NSRunningApplication(processIdentifier: draft.primaryCapture.processIdentifier)?
-            .activate(options: [.activateIgnoringOtherApps])
+        for url in savedURLs {
+            NSLog("Markup: saved feedback bundle to \(url.path)")
+            NSWorkspace.shared.noteFileSystemChanged(url.path)
+        }
+        NSSound(named: "Glass")?.play()
+
+        let lastOwnerPID = draft.activeArea?.owner?.processIdentifier
+        session.end()
+        clearSession()
+
+        if let lastOwnerPID {
+            NSRunningApplication(processIdentifier: lastOwnerPID)?
+                .activate(options: [.activateIgnoringOtherApps])
+        }
     }
 
-    private func requestRoute(for captured: CapturedWindow) -> AppRoute? {
-        if let route = settingsStore.route(for: captured.routeKey) {
+    // MARK: - Routes
+
+    private func routeForSave(key: String, name: String) -> AppRoute? {
+        if let route = settingsStore.route(for: key) {
             return route
         }
 
-        return changeRoute(for: captured, existingRoute: nil)
-    }
-
-    private func routeForSave(_ captured: CapturedWindow) -> AppRoute? {
-        settingsStore.route(for: captured.routeKey) ?? requestRoute(for: captured)
-    }
-
-    private func changeRoute(for captured: CapturedWindow, existingRoute: AppRoute?) -> AppRoute? {
-        let currentRoute = existingRoute ?? settingsStore.route(for: captured.routeKey)
-
-        return withOverlayTemporarilyHidden {
-            RoutePrompts.configureRoute(
-                bundleId: captured.routeKey,
-                appName: captured.routeName,
-                settingsStore: settingsStore,
-                existingRoute: currentRoute,
-                asksFeedbackPath: currentRoute == nil
-            )
-        }
-    }
-
-    private func withOverlayTemporarilyHidden<T>(_ action: () -> T) -> T {
-        let overlayWindow = overlayController?.window
-        let shouldRestoreOverlay = overlayWindow?.isVisible == true
-
-        if shouldRestoreOverlay {
-            overlayWindow?.orderOut(nil)
-        }
-
         NSApp.activate(ignoringOtherApps: true)
-        let result = action()
-
-        if shouldRestoreOverlay {
-            overlayWindow?.orderFrontRegardless()
-            overlayWindow?.makeKey()
-        }
-
-        return result
+        return RoutePrompts.configureRoute(
+            bundleId: key,
+            appName: name,
+            settingsStore: settingsStore,
+            existingRoute: nil,
+            asksFeedbackPath: true
+        )
     }
+
+    // MARK: - Permissions and alerts
 
     private func showAlert(title: String, message: String) {
         NSApp.activate(ignoringOtherApps: true)
@@ -443,6 +242,6 @@ final class CaptureCoordinator {
             return warning
         }
 
-        return "Markup needs Screen Recording permission before it can show the screenshot editor. After enabling it, relaunch Markup and try the hotkey again."
+        return "Markup needs Screen Recording permission before it can save marked areas. After enabling it, relaunch Markup and try the hotkey again."
     }
 }

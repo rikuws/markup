@@ -1,0 +1,431 @@
+import AppKit
+
+/// A borderless, fully transparent window that carries the live glass
+/// areas for one display. Key events are offered to the session first so
+/// Escape/Return work no matter where the mouse is.
+final class LiveSelectionWindow: NSWindow {
+    var onKeyEvent: ((NSEvent) -> Bool)?
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, onKeyEvent?(event) == true {
+            return
+        }
+
+        super.sendEvent(event)
+    }
+}
+
+/// The 2.0 replacement for the screenshot editor: one live session spanning
+/// every display. The desktop stays visible and live; the session only adds
+/// glass areas, caption chips, and one floating HUD. Nothing is captured
+/// until the user saves.
+///
+/// Subclasses NSResponder for its main-actor isolation, so the explicitly
+/// `@MainActor` dictation controller can be driven directly — the same
+/// footing the 1.x annotation view controller had.
+final class LiveMarkupSession: NSResponder {
+    let draft = LiveMarkupDraft()
+
+    var onSaveRequested: (() -> Void)?
+    var onCancelled: (() -> Void)?
+
+    private let dictation = NoteDictationController()
+    private let capturer: AreaCapturer
+    private var windows: [LiveSelectionWindow] = []
+    private var views: [LiveSelectionView] = []
+    private var hud: SessionHUDView?
+    private var isEditingActiveNote = false
+    private var contextPhrases: [String] = []
+    private var isEnded = false
+
+    var isActive: Bool {
+        !windows.isEmpty && !isEnded
+    }
+
+    init(capturer: AreaCapturer) {
+        self.capturer = capturer
+        super.init()
+        configureDictation()
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    // MARK: - Lifecycle
+
+    func begin() {
+        guard windows.isEmpty else { return }
+
+        NSApp.activate(ignoringOtherApps: true)
+
+        for screen in NSScreen.screens {
+            let window = LiveSelectionWindow(
+                contentRect: screen.frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            window.level = .screenSaver
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            window.isOpaque = false
+            window.backgroundColor = .clear
+            window.hasShadow = false
+            window.isReleasedWhenClosed = false
+            window.onKeyEvent = { [weak self] event in
+                self?.handleKeyEvent(event) ?? false
+            }
+
+            let view = LiveSelectionView(session: self)
+            window.contentView = view
+            window.setFrame(screen.frame, display: true)
+
+            windows.append(window)
+            views.append(view)
+        }
+
+        installHUD()
+
+        for window in windows {
+            window.orderFrontRegardless()
+        }
+        keyWindowUnderMouse()?.makeKey()
+
+        dictation.startListening()
+        refreshAll()
+    }
+
+    func refocus() {
+        NSApp.activate(ignoringOtherApps: true)
+        for window in windows {
+            window.orderFrontRegardless()
+        }
+        keyWindowUnderMouse()?.makeKey()
+    }
+
+    /// Commits in-flight dictation, stops the mic, and hides every session
+    /// window so save-time captures and prompt panels see a clean screen.
+    func suspendForSave() {
+        commitAllVolatile()
+        dictation.teardown()
+        for window in windows {
+            window.orderOut(nil)
+        }
+    }
+
+    func resumeAfterFailedSave() {
+        for window in windows {
+            window.orderFrontRegardless()
+        }
+        keyWindowUnderMouse()?.makeKey()
+        dictation.startListening()
+        refreshAll()
+    }
+
+    func end() {
+        guard !isEnded else { return }
+        isEnded = true
+        dictation.teardown()
+        for window in windows {
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+        windows = []
+        views = []
+        hud = nil
+    }
+
+    // MARK: - View callbacks
+
+    func commitSelection(localRect: NSRect, in view: LiveSelectionView, releasePoint: NSPoint) {
+        guard draft.canAddArea else {
+            NSSound.beep()
+            return
+        }
+
+        let globalRect = view.globalCGRect(forLocal: localRect)
+        guard globalRect.width >= 4, globalRect.height >= 4 else { return }
+
+        let owner = AreaWindowResolver.owningWindow(under: globalRect)
+            .map(AreaWindowResolver.owner(for:))
+
+        commitVolatileIntoActiveArea()
+        guard let area = draft.addArea(globalRect: globalRect, owner: owner) else { return }
+
+        // New dictation goes to the newest area.
+        dictation.beginNewTarget()
+        dictation.noteWasEdited("")
+        isEditingActiveNote = false
+
+        refreshAll()
+        view.runWave(areaID: area.id, releasePoint: releasePoint)
+        refreshDictationContext(for: area)
+    }
+
+    func activateArea(id: UUID) {
+        guard draft.activeAreaID != id, draft.areas.contains(where: { $0.id == id }) else { return }
+
+        commitVolatileIntoActiveArea()
+        draft.activate(id)
+        dictation.beginNewTarget()
+        dictation.noteWasEdited(draft.activeArea?.note ?? "")
+        refreshAll()
+    }
+
+    func removeArea(id: UUID) {
+        let wasActive = draft.activeAreaID == id
+        draft.removeArea(id: id)
+
+        if wasActive {
+            dictation.beginNewTarget()
+            dictation.noteWasEdited(draft.activeArea?.note ?? "")
+            isEditingActiveNote = false
+        }
+
+        refreshAll()
+    }
+
+    func noteEdited(id: UUID, text: String) {
+        guard let area = draft.areas.first(where: { $0.id == id }) else { return }
+        area.note = text
+        area.volatileNote = ""
+        if area.id == draft.activeAreaID {
+            dictation.noteWasEdited(text)
+        }
+        updateHUD()
+    }
+
+    func noteEditingChanged(id: UUID, isEditing: Bool) {
+        if isEditing {
+            activateArea(id: id)
+        }
+        if id == draft.activeAreaID {
+            isEditingActiveNote = isEditing
+        }
+        if !isEditing {
+            refreshTexts()
+        }
+    }
+
+    func toggleListening() {
+        switch dictation.state {
+        case .unavailable:
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                NSWorkspace.shared.open(url)
+            }
+        default:
+            dictation.toggleMuted()
+        }
+    }
+
+    // MARK: - Keyboard
+
+    private func handleKeyEvent(_ event: NSEvent) -> Bool {
+        // A note field is being edited; let the field editor own the keys.
+        if event.window?.firstResponder is NSTextView {
+            return false
+        }
+
+        switch event.keyCode {
+        case 53: // Escape: mute first, cancel second.
+            if dictation.isListening || dictation.state == .preparing {
+                dictation.mute()
+                return true
+            }
+            cancel()
+            return true
+        case 36, 76: // Return / Enter
+            requestSave()
+            return true
+        case 51 where event.modifierFlags.contains(.command): // Cmd+Delete
+            if let active = draft.activeAreaID {
+                removeArea(id: active)
+                return true
+            }
+            return false
+        default:
+            return false
+        }
+    }
+
+    func requestSave() {
+        commitVolatileIntoActiveArea()
+
+        guard draft.isComplete else {
+            NSSound.beep()
+            // Retarget dictation at the first area still missing a note so
+            // the user can just start talking.
+            if let missing = draft.firstAreaMissingNote {
+                activateArea(id: missing.id)
+            } else {
+                refreshAll()
+            }
+            return
+        }
+
+        onSaveRequested?()
+    }
+
+    func cancel() {
+        end()
+        onCancelled?()
+    }
+
+    // MARK: - Dictation
+
+    private func configureDictation() {
+        dictation.onStateChanged = { [weak self] _ in
+            self?.updateHUD()
+        }
+        dictation.onSpeechDetectedChanged = { [weak self] detected in
+            self?.hud?.listeningChip.speechDetected = detected
+        }
+        dictation.onTranscriptChanged = { [weak self] committed, volatile in
+            guard let self, !self.isEditingActiveNote else { return }
+            guard let area = self.draft.activeArea else { return }
+            area.note = committed
+            area.volatileNote = volatile
+            self.refreshTexts()
+            self.updateHUD()
+        }
+    }
+
+    private func commitVolatileIntoActiveArea() {
+        guard let area = draft.activeArea else { return }
+        area.note = area.combinedNote
+        area.volatileNote = ""
+    }
+
+    private func commitAllVolatile() {
+        for area in draft.areas {
+            area.note = area.combinedNote
+            area.volatileNote = ""
+        }
+    }
+
+    /// OCR the pixels under a fresh area (session windows are excluded from
+    /// the capture, so the glass never pollutes the sample) and fold the
+    /// recognized labels into the dictation vocabulary. Runs off the main
+    /// thread; the capture helper blocks its thread while ScreenCaptureKit
+    /// works.
+    private func refreshDictationContext(for area: MarkupArea) {
+        var extras = [area.displayName, area.routeName]
+        if let owner = area.owner {
+            extras.append(owner.windowTitle)
+            if let title = owner.browserPage?.title {
+                extras.append(title)
+            }
+        }
+
+        let rect = area.globalRect
+        let capturer = capturer
+        Task.detached { [weak self] in
+            let snapshot = capturer.captureAreaSnapshot(rect)
+            let phrases: [String]
+            if let cgImage = snapshot?.bestCGImage() {
+                phrases = ScreenshotTextIndex.phrases(from: cgImage, extras: extras)
+            } else {
+                phrases = extras
+            }
+            await MainActor.run {
+                self?.mergeContextPhrases(phrases)
+            }
+        }
+    }
+
+    private func mergeContextPhrases(_ phrases: [String]) {
+        var seen = Set(contextPhrases.map { $0.lowercased() })
+        for phrase in phrases where seen.insert(phrase.lowercased()).inserted {
+            contextPhrases.append(phrase)
+        }
+        if contextPhrases.count > ScreenshotTextIndex.maximumPhrases {
+            contextPhrases = Array(contextPhrases.suffix(ScreenshotTextIndex.maximumPhrases))
+        }
+        dictation.setContextualPhrases(contextPhrases)
+    }
+
+    // MARK: - Rendering
+
+    private func refreshAll() {
+        for view in views {
+            view.reload(areas: entries(for: view), activeID: draft.activeAreaID)
+        }
+        updateHUD()
+    }
+
+    private func refreshTexts() {
+        for view in views {
+            view.refreshChipTexts(areas: entries(for: view), activeID: draft.activeAreaID)
+        }
+    }
+
+    private func entries(for view: LiveSelectionView) -> [(area: MarkupArea, index: Int)] {
+        guard let window = view.window else { return [] }
+        return draft.areas.enumerated().compactMap { offset, area in
+            let cocoa = ScreenGeometry.cocoaRect(fromCG: area.globalRect)
+            let center = NSPoint(x: cocoa.midX, y: cocoa.midY)
+            guard window.frame.contains(center) else { return nil }
+            return (area: area, index: offset + 1)
+        }
+    }
+
+    private func installHUD() {
+        guard hud == nil else { return }
+
+        let mouse = NSEvent.mouseLocation
+        let hostIndex = windows.firstIndex { $0.frame.contains(mouse) } ?? 0
+        guard views.indices.contains(hostIndex) else { return }
+
+        let hud = SessionHUDView()
+        hud.onToggleListening = { [weak self] in
+            self?.toggleListening()
+        }
+        hud.onSave = { [weak self] in
+            self?.requestSave()
+        }
+        hud.onCancel = { [weak self] in
+            self?.cancel()
+        }
+        views[hostIndex].addSubview(hud)
+        self.hud = hud
+        updateHUD()
+    }
+
+    private func updateHUD() {
+        guard let hud else { return }
+
+        hud.listeningChip.mode = {
+            switch dictation.state {
+            case .idle: return .muted
+            case .preparing: return .preparing
+            case .listening: return .listening
+            case .muted: return .muted
+            case .unavailable: return .unavailable
+            }
+        }()
+        hud.update(
+            areaCount: draft.areas.count,
+            canSave: draft.isComplete,
+            isListening: dictation.isListening
+        )
+
+        guard let host = hud.superview else { return }
+        let size = hud.fittingSize
+        let width = max(size.width, 360)
+        let height = max(size.height, 40)
+        hud.frame = NSRect(
+            x: host.bounds.midX - width / 2,
+            y: host.bounds.maxY - height - 24,
+            width: width,
+            height: height
+        )
+    }
+
+    private func keyWindowUnderMouse() -> LiveSelectionWindow? {
+        let mouse = NSEvent.mouseLocation
+        return windows.first { $0.frame.contains(mouse) } ?? windows.first
+    }
+}
