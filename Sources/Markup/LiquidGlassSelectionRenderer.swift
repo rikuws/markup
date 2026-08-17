@@ -1,12 +1,22 @@
 import AppKit
 
 /// Paints a flattened approximation of the Liquid Glass selection pane
-/// into exported screenshots. The live UI uses a filled `.clear` glass
-/// rounded rect whose rim melts into the interior; system glass cannot
-/// be composited into an offscreen bitmap, so exports get the same read —
-/// a soft glass wash, stronger at the edges, with a light-catching outer
-/// rim and no inner bevel.
+/// into exported screenshots. The live UI uses `.clear` glass on a filled
+/// rounded rect, masked so the rim melts away quickly and the interior
+/// stays clear. System glass cannot be composited into an offscreen
+/// bitmap, so exports get the same read — a short edge wash, a hairline
+/// rim, and an open center.
 enum LiquidGlassSelectionRenderer {
+    /// Rim depth as a fraction of the pane's shortest side. Kept small so
+    /// most of the selection stays clear of glass.
+    static let meltFraction: CGFloat = 0.18
+    static let meltMin: CGFloat = 12
+    static let meltMax: CGFloat = 36
+
+    static func meltDepth(shortest: CGFloat, scale: CGFloat = 1) -> CGFloat {
+        max(meltMin * scale, min(shortest * meltFraction, meltMax * scale))
+    }
+
     static func drawPane(rect: CGRect, in context: CGContext, scale: CGFloat = 1) {
         guard rect.width > 1, rect.height > 1 else { return }
 
@@ -17,50 +27,30 @@ enum LiquidGlassSelectionRenderer {
         context.setShouldAntialias(true)
         context.setAllowsAntialiasing(true)
 
-        drawContactShadow(path: path, scale: scale, in: context)
         drawMelt(rect: rect, path: path, scale: scale, in: context)
         drawRim(rect: rect, path: path, scale: scale, in: context)
 
         context.restoreGState()
     }
 
-    /// Soft shadow just outside the pane so it reads as floating glass.
-    private static func drawContactShadow(path: CGPath, scale: CGFloat, in context: CGContext) {
-        context.saveGState()
-        context.setShadow(
-            offset: CGSize(width: 0, height: -2 * scale),
-            blur: 8 * scale,
-            color: NSColor.black.withAlphaComponent(0.10).cgColor
-        )
-        context.addPath(path)
-        context.setStrokeColor(NSColor.black.withAlphaComponent(0.08).cgColor)
-        context.setLineWidth(1.5 * scale)
-        context.strokePath()
-        context.restoreGState()
-    }
-
-    /// Glass color across the pane, denser at the rim and easing into the
-    /// center — the look of `.clear` Liquid Glass melting inward rather
-    /// than a punched-out band with an inner bevel.
+    /// Glass color packed against the rim so the interior stays clear.
+    /// Strokes are clipped to the pane — nothing blooms outside as a glow.
     private static func drawMelt(rect: CGRect, path: CGPath, scale: CGFloat, in context: CGContext) {
         context.saveGState()
         context.addPath(path)
         context.clip()
 
-        context.setFillColor(NSColor.white.withAlphaComponent(0.04).cgColor)
-        context.fill(rect)
-        context.setFillColor(NSColor.black.withAlphaComponent(0.02).cgColor)
-        context.fill(rect)
-
         let shortest = min(rect.width, rect.height)
-        let melt = min(shortest * 0.48, 100 * scale)
+        let melt = meltDepth(shortest: shortest, scale: scale)
+        // Line widths are centered on the path; clipping leaves half of
+        // each stroke as the inward wash. `melt * 2` therefore reaches
+        // about `melt` into the pane, then the tighter bands steepen
+        // the falloff so the center is left alone.
         let bands: [(width: CGFloat, alpha: CGFloat)] = [
-            (melt * 1.7, 0.03),
-            (melt * 1.15, 0.045),
-            (melt * 0.72, 0.06),
-            (melt * 0.4, 0.08),
-            (melt * 0.18, 0.10),
-            (4 * scale, 0.08)
+            (melt * 2.0, 0.04),
+            (melt * 1.1, 0.06),
+            (melt * 0.45, 0.08),
+            (2.5 * scale, 0.10)
         ]
         for band in bands {
             context.addPath(path)
