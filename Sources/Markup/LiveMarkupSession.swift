@@ -261,11 +261,13 @@ final class LiveMarkupSession: NSResponder {
 
     func noteEdited(id: UUID, text: String) {
         guard let area = draft.areas.first(where: { $0.id == id }) else { return }
+        dictation.learnFromEdit(previous: area.note, edited: text)
         area.note = text
         area.volatileNote = ""
         if area.id == draft.activeAreaID {
             dictation.noteWasEdited(text)
         }
+        refreshRecognitionContext()
         updateHUD()
     }
 
@@ -364,6 +366,9 @@ final class LiveMarkupSession: NSResponder {
             area.volatileNote = volatile
             self.refreshTexts()
             self.updateHUD()
+            if volatile.isEmpty {
+                self.refreshRecognitionContext()
+            }
         }
     }
 
@@ -391,10 +396,20 @@ final class LiveMarkupSession: NSResponder {
     // MARK: - Rendering
 
     private func refreshAll() {
+        refreshRecognitionContext()
         for view in views {
             view.reload(areas: entries(for: view), activeID: draft.activeAreaID)
         }
         updateHUD()
+    }
+
+    private func refreshRecognitionContext() {
+        var terms = TechnicalTranscriptResolver.sessionTerms(from: draft.areas)
+        if let pid = originProcessID,
+           let name = NSRunningApplication(processIdentifier: pid)?.localizedName {
+            terms.insert(name, at: 0)
+        }
+        dictation.updateSessionTerms(terms)
     }
 
     private func refreshTexts() {

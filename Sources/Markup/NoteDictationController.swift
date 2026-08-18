@@ -63,6 +63,10 @@ final class NoteDictationController {
     private var clipPrefix = ""
     private var targetFinalized = AttributedString()
     private var targetVolatile = AttributedString()
+    private var resolver = TechnicalTranscriptResolver()
+    /// True while the fallback `DictationTranscriber` is running, so session
+    /// vocabulary can be pushed through `AnalysisContext`.
+    private var usesDictationContext = false
 
     nonisolated static var hasMicrophoneAccess: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -89,7 +93,27 @@ final class NoteDictationController {
         beginNewTarget(adopting: note)
     }
 
+    func learnFromEdit(previous: String, edited: String) {
+        resolver.learnCorrection(from: previous, to: edited)
+    }
+
+    func updateSessionTerms(_ terms: [String]) {
+        var unique: [String] = []
+        var seen = Set<String>()
+        for term in terms {
+            let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if seen.insert(trimmed.lowercased()).inserted {
+                unique.append(trimmed)
+            }
+        }
+        resolver.sessionTerms = unique
+        guard usesDictationContext, analyzer != nil else { return }
+        Task { await self.pushDictationContext() }
+    }
+
     func noteWasEdited(_ note: String) {
+        resolver.learnCorrection(from: committedText, to: note)
         baseNote = note
         targetStart = lastHeardEnd
         targetFinalized = AttributedString()
@@ -258,7 +282,13 @@ final class NoteDictationController {
             tapInstalled = true
             self.converter = converter
             speechDetected = false
+            usesDictationContext = {
+                if case .dictation = prepared { return true }
+                return false
+            }()
             state = .listening
+            await pushDictationContext()
+            guard pendingStart, sessionID == currentSession, !Task.isCancelled else { return }
 
             analysisTask = Task {
                 do {
@@ -278,9 +308,10 @@ final class NoteDictationController {
                     case .speech(let transcriber):
                         for try await result in transcriber.results {
                             await MainActor.run {
-                                self.handle(
+                                self.ingest(
                                     range: result.range,
-                                    text: result.text,
+                                    primary: result.text,
+                                    alternatives: result.alternatives,
                                     isFinal: result.isFinal,
                                     session: currentSession
                                 )
@@ -289,9 +320,10 @@ final class NoteDictationController {
                     case .dictation(let transcriber):
                         for try await result in transcriber.results {
                             await MainActor.run {
-                                self.handle(
+                                self.ingest(
                                     range: result.range,
-                                    text: result.text,
+                                    primary: result.text,
+                                    alternatives: result.alternatives,
                                     isFinal: result.isFinal,
                                     session: currentSession
                                 )
@@ -324,6 +356,29 @@ final class NoteDictationController {
         }
     }
 
+    private func ingest(
+        range: CMTimeRange,
+        primary: AttributedString,
+        alternatives: [AttributedString],
+        isFinal: Bool,
+        session: UUID
+    ) {
+        let preferred = resolver.preferredTranscription(
+            primary: primary,
+            alternatives: alternatives
+        )
+        if isFinal {
+            let original = String(primary.characters)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let chosen = String(preferred.characters)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if original != chosen {
+                NSLog("Markup: dictation alternative “\(original)” → “\(chosen)”")
+            }
+        }
+        handle(range: range, text: preferred, isFinal: isFinal, session: session)
+    }
+
     private func handle(range: CMTimeRange, text: AttributedString, isFinal: Bool, session: UUID) {
         guard sessionID == session, state == .listening else { return }
 
@@ -350,9 +405,28 @@ final class NoteDictationController {
             targetVolatile = AttributedString(clippedPlain)
         }
 
-        committedText = Self.join(baseNote, Self.plain(targetFinalized))
-        volatileText = Self.plain(targetVolatile)
+        let spokenFinal = Self.plain(targetFinalized)
+        let spokenVolatile = Self.plain(targetVolatile)
+        let resolvedFinal = resolver.resolvedSpeech(spokenFinal)
+        let resolvedVolatile = resolver.resolvedSpeech(spokenVolatile)
+        if isFinal, spokenFinal != resolvedFinal {
+            NSLog("Markup: dictation rewrite “\(spokenFinal)” → “\(resolvedFinal)”")
+        }
+
+        committedText = Self.join(baseNote, resolvedFinal)
+        volatileText = resolvedVolatile
         publishTranscript()
+    }
+
+    private func pushDictationContext() async {
+        guard usesDictationContext, let analyzer else { return }
+        let context = AnalysisContext()
+        context.contextualStrings = [.general: resolver.contextualPhrases]
+        do {
+            try await analyzer.setContext(context)
+        } catch {
+            NSLog("Markup: dictation context update failed: \(error.localizedDescription)")
+        }
     }
 
     private func clipToCurrentTarget(_ text: AttributedString, range: CMTimeRange) -> AttributedString {
@@ -440,6 +514,7 @@ final class NoteDictationController {
         preparedTranscriber = nil
         speechDetector = nil
         analyzer = nil
+        usesDictationContext = false
         sessionID = UUID()
         resetAudioClockKeepingNote()
 
@@ -456,9 +531,14 @@ final class NoteDictationController {
     private static func makeEngine() async throws -> PreparedTranscriber {
         if SpeechTranscriber.isAvailable,
            let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) {
+            let preset = SpeechTranscriber.Preset.timeIndexedProgressiveTranscription
             let transcriber = SpeechTranscriber(
                 locale: locale,
-                preset: .timeIndexedProgressiveTranscription
+                transcriptionOptions: preset.transcriptionOptions,
+                reportingOptions: preset.reportingOptions
+                    .subtracting([.fastResults])
+                    .union([.alternativeTranscriptions]),
+                attributeOptions: preset.attributeOptions.union([.transcriptionConfidence])
             )
             try await ensureAssets(for: [transcriber], locale: locale)
             NSLog("Markup: dictation engine SpeechTranscriber (\(locale.identifier))")
@@ -468,9 +548,16 @@ final class NoteDictationController {
         guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: .current) else {
             throw MarkupError("Dictation is not available for the current language.")
         }
+        let preset = DictationTranscriber.Preset.progressiveLongDictation
         let transcriber = DictationTranscriber(
             locale: locale,
-            preset: .progressiveLongDictation
+            contentHints: preset.contentHints,
+            transcriptionOptions: preset.transcriptionOptions,
+            reportingOptions: preset.reportingOptions.union([.alternativeTranscriptions]),
+            attributeOptions: preset.attributeOptions.union([
+                .audioTimeRange,
+                .transcriptionConfidence
+            ])
         )
         try await ensureAssets(for: [transcriber], locale: locale)
         NSLog("Markup: dictation engine DictationTranscriber fallback (\(locale.identifier))")
