@@ -24,7 +24,7 @@ Do not end listening when the mouse goes up. People keep talking after the recta
 
 First-run Microphone permission must not appear on top of the overlay. Ask at first capture *before* the overlay, or from Settings. If the user declines, typing still works.
 
-## Engine: SpeechAnalyzer, live, not WhisperKit
+## Engine: SpeechAnalyzer + SpeechTranscriber
 
 Keyboard Dictation is the Globe/Fn IME. Skip it.
 
@@ -34,29 +34,23 @@ WhisperKit (`large-v3-v20240930_626MB`) is real Whisper and can win on jargon, b
 - Keeping that model resident in a menu-bar app is hundreds of MB of RAM on every launch.
 - Open-source streaming is “re-transcribe a growing buffer,” which fights Liquid Glass selection on the same machine. SpeechAnalyzer is built for live volatile results on the Neural Engine.
 
-Apple’s 2026 `SpeechAnalyzer` is not Keyboard Dictation. Notes uses this model. On English LibriSpeech it beats Whisper Small (~2.1% vs ~3.7% WER) and is faster. For a 10–40s “what’s wrong with this control” utterance, that is the fluent engine.
+Apple’s 2026 `SpeechAnalyzer` is not Keyboard Dictation. Notes’ live record/transcribe feature uses `SpeechAnalyzer` + **`SpeechTranscriber`** — the new on-device model (WWDC 2025). That is the engine Markup uses. `DictationTranscriber` is the old `SFSpeechRecognizer` model, kept only as a fallback when `SpeechTranscriber` is unavailable for the device or locale.
 
 Use:
 
-- `DictationTranscriber` — punctuated, coworker-style prose, not raw captions. Apple’s own live-mic sample uses this module.
-- `reportingOptions: [.volatileResults]` — the note updates while they draw.
+- `SpeechTranscriber` with `timeIndexedProgressiveTranscription` — live volatile results plus per-token audio time ranges, so a new area can take only speech from the moment the drag starts.
 - `SpeechDetector` in the same `SpeechAnalyzer` — segment speech, ignore silence, do not require a stop button.
-- `AnalysisContext.contextualStrings` — up to 100 phrases. This is Markup’s accuracy lever (see below).
-- `AssetInventory` + `modelRetention: .lingering` — warm during `captureActiveWindow()`, keep the locale model around between captures.
+- `AssetInventory` + `modelRetention: .lingering` — warm on session start, keep the locale model around between captures.
 
-Do not call the OpenAI Whisper API. Do not add `SFSpeechRecognizer`.
+Do not call the OpenAI Whisper API. Do not add `SFSpeechRecognizer`. Do not feed screenshot OCR into `AnalysisContext.contextualStrings`; `SpeechTranscriber` does not take that list. Visible UI copy is OCR’d at save time and written into `instruction.md` / `metadata.json` for the agent.
 
-Revisit WhisperKit only if live SpeechAnalyzer still mangles UI jargon after contextual strings and screenshot OCR are in. Same overlay UX; swap the transcriber, do not change the gesture.
+Revisit WhisperKit only if live `SpeechTranscriber` still mangles UI jargon after the saved visible-text context is in the bundle. Same overlay UX; swap the transcriber, do not change the gesture.
 
-## Accuracy without Whisper: bias from the screenshot
+## Visible UI text in the bundle, not in the recognizer
 
-A coworker can see the labels on screen. The transcriber cannot, unless we tell it.
+A coworker can see the labels on screen. The agent can too, if we write them down.
 
-When the overlay opens, run `VNRecognizeTextRequest` on the captured image (already in memory) and take the strongest unique tokens — button titles, headings, visible copy. Combine with app name, window title, route name, and a tiny UI glossary (`button`, `navbar`, `sheet`, `padding`, `screenshot`). Feed that set as `contextualStrings`.
-
-That is why SpeechAnalyzer can be *more* accurate than generic Whisper for Markup: the vocabulary is this window, right now. Whisper’s free-form prompt can do something similar, but not at the cost of live latency.
-
-Cap at 100 phrases. Refresh when the user adds a shot.
+At save time, run `VNRecognizeTextRequest` on the marked region of each captured image and store the strongest unique lines as `captures[n].visibleText`. `instruction.md` repeats them under each area. That is Markup’s jargon lever now — it helps the coding agent, not the speech model.
 
 ## Signing
 
@@ -66,16 +60,16 @@ Rewrite `NSMicrophoneUsageDescription` to: Markup listens while you mark a scree
 
 ## Implementation sketch
 
-`NoteDictationController` owned by the annotation overlay:
+`NoteDictationController` owned by the live session:
 
-1. During capture, request mic permission if needed, reserve `DictationTranscriber` assets, build the analyzer with transcriber + detector.
-2. On overlay `viewDidAppear`, start `AVCaptureSession` (more reliable than `AVAudioEngine` input on macOS) → `AnalyzerInput` stream → `analyzer.start(inputSequence:)`.
-3. `setContext` from capture metadata + OCR tokens.
-4. Consume `transcriber.results`: append finals, replace the trailing volatile span in `noteTextView` without stealing first responder from the canvas.
+1. During session start, request mic permission if needed, reserve `SpeechTranscriber` assets (fall back to `DictationTranscriber` only when the new model is unavailable), build the analyzer with transcriber + detector.
+2. Start `AVAudioEngine` input → `AnalyzerInput` stream → `analyzer.start(inputSequence:)`.
+3. Consume `transcriber.results` by audio time range: assemble the current target with replace-or-append; ignore results that ended before the current target started.
+4. Starting a new-area drag freezes the previous area’s note and retargets. Speech during that drag and after mouse-up belongs only to the new area. Clicking an existing area retargets the same way.
 5. Listening chip reflects detector / analyzer state. Mute finalizes through end of input; unmute starts a new session and appends.
-6. On Save / Cancel, `finalizeAndFinish` or `cancelAndFinishNow`, stop capture, release the mic.
+6. On Save, OCR each marked region into the bundle. On Save / Cancel, `finalizeAndFinish` or `cancelAndFinishNow`, stop capture, release the mic.
 
-Keep canvas first responder while listening. Gate overlay Escape (mute vs cancel) and do not let Save’s Return key equivalent fire during an active utterance.
+Keep the session view first responder while listening. Gate Escape (mute vs cancel) and do not let Save’s Return key equivalent fire during an active utterance.
 
 ## Files
 
@@ -83,17 +77,19 @@ Keep canvas first responder while listening. Gate overlay Escape (mute vs cancel
 | --- | --- |
 | `Sources/Markup/Resources/Markup.entitlements` | Hardened-runtime audio input. |
 | `scripts/build-app.sh` | `--entitlements`; microphone usage string. |
-| `Sources/Markup/NoteDictationController.swift` | Warm, listen, VAD, volatile/final text, mute. |
-| `Sources/Markup/ScreenshotTextIndex.swift` | One-shot Vision OCR → contextual phrases. |
-| `Sources/Markup/AnnotationWindowController.swift` | Auto-listen, chip, do not focus the note mid-speech, Escape gating. |
-| `Sources/Markup/CaptureCoordinator.swift` | Pre-warm on capture. |
+| `Sources/Markup/NoteDictationController.swift` | `SpeechTranscriber`, VAD, volatile/final text, time-range retargeting, mute. |
+| `Sources/Markup/LiveMarkupSession.swift` | Auto-listen, retarget at new-area drag start, Escape gating. |
+| `Sources/Markup/ScreenshotTextIndex.swift` | Save-time Vision OCR → bundle `visibleText`. |
+| `Sources/Markup/FeedbackBundleWriter.swift` | Write visible UI text into `instruction.md` and metadata. |
+| `Sources/Markup/CaptureCoordinator.swift` | Pre-warm on session start. |
 | `README.md` | Mark and talk; on-device; mic permission. |
 
 ## Mac test checklist
 
-- Speak while dragging the box; first words appear before mouse-up.
-- Pause, resize the box, keep talking; both sentences are in the note.
-- Visible UI label (“Sign in”, a unique heading) is transcribed correctly more often with OCR context than without.
+- Speak while dragging the first box; those words land on that area, not a later one.
+- Draw a second area while talking; only speech from the start of that drag (and after) is on the second note.
+- Pause, keep talking after mouse-up; the continuation stays on the current area.
+- Saved `instruction.md` lists visible UI text for the marked region.
 - Escape mutes; second Escape cancels.
-- Clicking the note lets them edit without killing already-final text.
+- Clicking an existing area lets you add a sentence without copying the previous area’s note.
 - Notarized build prompts for Microphone once, then works offline for later captures (locale model already on disk).

@@ -287,6 +287,9 @@ struct FeedbackMetadata: Codable {
         /// Schema v4: the per-area note. 1.x shared one note across shots;
         /// live areas each carry their own.
         var note: String?
+        /// Visible UI copy OCR'd from the marked region at save time, for
+        /// agents. Not used as dictation vocabulary.
+        var visibleText: [String]?
         var app: AppMetadata
         var browser: BrowserPageContext?
         var capture: CaptureMetadata

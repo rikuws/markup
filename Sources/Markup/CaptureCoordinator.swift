@@ -41,7 +41,7 @@ final class CaptureCoordinator {
     private func startSession() {
         guard ensureCaptureAccess() else { return }
 
-        let session = LiveMarkupSession(capturer: capturer)
+        let session = LiveMarkupSession()
         session.onSaveRequested = { [weak self] in
             self?.saveSession()
         }

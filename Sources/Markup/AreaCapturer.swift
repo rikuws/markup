@@ -3,9 +3,9 @@ import ScreenCaptureKit
 
 /// Captures the pixels for live areas. This is 2.0's inversion of the 1.x
 /// pipeline: nothing is captured when the session starts — each area's
-/// pixels are read from the screen when the user saves (and once at
-/// mouse-up, for OCR dictation context). Markup's own windows are excluded
-/// from every capture so the glass panes never appear in the output.
+/// pixels are read from the screen when the user saves. Markup's own
+/// windows are excluded from every capture so the glass panes never appear
+/// in the output.
 final class AreaCapturer {
     func screenCaptureAccess() -> ScreenCaptureAccess {
         if DeveloperSession.isDebuggerAttached {
@@ -63,14 +63,6 @@ final class AreaCapturer {
             region: CaptureRegion(x: 0, y: 0, width: cgImage.width, height: cgImage.height),
             source: .areaOnly
         )
-    }
-
-    /// One-off capture of just the area's pixels, used at mouse-up for the
-    /// OCR dictation bias. The session windows are on screen at that point,
-    /// so excluding Markup's application from the filter is what keeps the
-    /// glass out of the sample.
-    func captureAreaSnapshot(_ globalRect: CGRect) -> NSImage? {
-        captureDisplayRect(globalRect)
     }
 
     private func captureWindowImage(windowID: CGWindowID) -> NSImage? {

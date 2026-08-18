@@ -11,7 +11,7 @@ The first cut of the whole pipeline is implemented on this branch and needs Mac 
 - Live session: `LiveMarkupSession` + `LiveSelectionWindow`/`LiveSelectionView` (one transparent window per display, drag-to-create glass areas, caption chips with editable notes, floating HUD, Esc-mute/Esc-cancel/Return-save).
 - Per-area app detection: `AreaWindowResolver` (CGWindowList hit-test, majority vote over center + corners).
 - Save-time capture: `AreaCapturer` (owner window → display-rect → area-only fallbacks; Markup's windows excluded from every display capture).
-- Dictation retargeting: `NoteDictationController.beginNewTarget()` with volatile carryover dedup; latest area is the default target, click-to-retarget works via areas and chips.
+- Dictation retargeting: `SpeechTranscriber` with audio time ranges; a new-area drag freezes the previous note and routes later speech only to the new area. Click-to-retarget works via areas and chips.
 - Routing and output: per-area routes grouped into one bundle per route (`FeedbackBundleWriter`, metadata schema v4 with per-area notes; `instruction.md` keeps a combined "User note:" block for inbox compatibility).
 - Retired: `AnnotationWindowController`, `AnnotationCanvasView` (glass pane extracted to `SelectionGlass.swift`), `AppendCaptureHUDController`, `ActiveWindowCapturer`, `ScreenRecorder`, `RecordingProgressWindowController`. There is no Record 10s in 2.0.
 
@@ -26,7 +26,7 @@ Everything in that middle section — the screenshot-based editor — goes away:
 - The dimmed `alpha 0.72` overlay look. There is no "overlay mode" in 2.0; there is only the desktop with glass on it.
 - The Add Shot / append-capture dance (`AppendCaptureHUDController`, re-arming the hotkey, reactivating the target app). Multi-area on the live screen replaces multi-shot.
 
-What survives, mostly intact: `HotKeyManager`, `CaptureCoordinator` (heavily reshaped), the glass rendering stack (`LiquidWaveShape`, `SelectionGlassPane`, `PassthroughGlassView`, `LiquidGlassSelectionRenderer`), `NoteDictationController`, `ScreenshotTextIndex`, the whole routing stack (`RouteTargetResolver`, `BrowserPageContextResolver`, `RoutePrompts`, `SettingsStore`), `FeedbackBundleWriter`, `StatusBarController`, `TopNotchController`.
+What survives, mostly intact: `HotKeyManager`, `CaptureCoordinator` (heavily reshaped), the glass rendering stack (`LiquidWaveShape`, `SelectionGlassPane`, `PassthroughGlassView`, `LiquidGlassSelectionRenderer`), `NoteDictationController` (now `SpeechTranscriber`), `ScreenshotTextIndex` (save-time visible text, not dictation bias), the whole routing stack (`RouteTargetResolver`, `BrowserPageContextResolver`, `RoutePrompts`, `SettingsStore`), `FeedbackBundleWriter`, `StatusBarController`, `TopNotchController`.
 
 ## The interaction
 
@@ -54,7 +54,7 @@ The capture happens at **save time**, not at hotkey time. That is the fundamenta
 
 `FeedbackDraft` becomes a list of **areas** instead of a list of shots: each area = rect (display-relative) + owning app/route + its own note + creation timestamp. `maximumShots = 6` becomes a soft cap on areas, probably higher.
 
-Dictation is one continuous session (one mic, one `SpeechAnalyzer`) with a **routing rule** deciding which area's note receives the text. Default rule, per the vision: **speech goes to the latest area** — starting a new drag finalizes the volatile text into the previous area's note and retargets the transcript stream to the new area. This matches how people narrate: draw, talk about it, draw the next thing, talk about that.
+Dictation is one continuous session (one mic, one `SpeechAnalyzer`) with a **routing rule** deciding which area's note receives the text. Speech goes to the latest area, but the cut happens when the **drag starts**, not at mouse-up: starting a new drag freezes the previous area's note and retargets the transcript stream so only audio from that moment on (during the drag and after) lands in the new area. Results are sliced by `SpeechTranscriber` audio time ranges, not by string-prefix stripping of the whole session transcript.
 
 Refinements to explore on this branch (deliberately open, in rough priority order):
 
@@ -62,7 +62,7 @@ Refinements to explore on this branch (deliberately open, in rough priority orde
 - **Utterance-boundary switching:** retarget only at `SpeechDetector` silence boundaries, so a sentence in flight never straddles two areas even if the user starts drawing mid-sentence.
 - **Ordinal references:** "the second box" style verbal addressing. Probably overkill; do not build first.
 
-`ScreenshotTextIndex` OCR bias runs per area at mouse-up (OCR the pixels under the new rect) and merges into `contextualStrings`, refreshing the vocabulary as areas accumulate — the 2.0 equivalent of "refresh when the user adds a shot".
+`ScreenshotTextIndex` OCR runs per area at save time (the marked region of the captured image) and is written into the bundle as visible UI text — the 2.0 equivalent of giving the agent the labels a coworker can see. It is not fed into the recognizer.
 
 ## What changes where
 
@@ -73,7 +73,7 @@ Refinements to explore on this branch (deliberately open, in rough priority orde
 | `AnnotationCanvasView.swift` | `SelectionGlassPane` and drag logic extracted and reused on the transparent session window; the image-hosting canvas dies. |
 | `ActiveWindowCapturer.swift` | Becomes area-rect display capture + per-area window/app hit-testing. |
 | `Models.swift` | `FeedbackDraft` shots → areas (rect + route + note each); metadata schema v4. |
-| `NoteDictationController.swift` | Gains the retargeting seam: transcript consumer switches active area; finalize-on-retarget. |
+| `NoteDictationController.swift` | `SpeechTranscriber`; retargeting seam is a time cutoff at drag start, not string-prefix carryover. |
 | `BrowserPageContextResolver.swift` | Resolve page context for a specific window, not just the frontmost tab. |
 | `RouteTargetResolver.swift` / `RoutePrompts` / `SettingsStore` | Unchanged in behavior; called per area at save time. |
 | `FeedbackBundleWriter.swift` | Group areas by route; one bundle per route per save. |
@@ -85,6 +85,6 @@ Refinements to explore on this branch (deliberately open, in rough priority orde
 - **Screen changes during the session:** if the app under an area scrolls or navigates before save, the saved pixels differ from what the user marked. Consider snapshotting each area's pixels at mouse-up as the default, with live-at-save as the option — this needs real-Mac feel testing.
 - **Click-through:** while the session is active, should clicks outside any glass area pass through to the apps below (so you can reproduce a bug mid-session)? Powerful, but risks accidental interaction; probably a modifier-key escape hatch rather than the default.
 - **Where does the note text live visually?** No editor window means transcribed text needs a home: a small glass caption attached to each area is the current bet; must not cover the very pixels being discussed.
-- **Dictation targeting rule:** latest-area is the starting default; utterance-boundary switching and click-to-retarget are the candidates to test on a Mac before committing.
+- **Dictation targeting rule:** speech from the start of a new-area drag (and after mouse-up) belongs only to that area; click-to-retarget appends to an existing note. Routing is by audio time range.
 
 All feel/latency questions (glass over live content, mic-to-first-word, retargeting mid-sentence) need a Mac on macOS 26 — same constraint as `docs/dictation.md`. This VM edits code and docs only.

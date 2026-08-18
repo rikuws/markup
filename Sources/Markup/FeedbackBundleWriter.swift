@@ -45,11 +45,13 @@ final class FeedbackBundleWriter {
 
             let cgImage = capture.image.bestCGImage()
             let area = capture.area
+            let visibleText = ScreenshotTextIndex.visibleText(from: capture.image, region: capture.region)
             items.append(
                 .init(
                     index: index,
                     label: nil,
                     note: area.trimmedNote,
+                    visibleText: visibleText.isEmpty ? nil : visibleText,
                     app: .init(
                         bundleId: area.owner?.bundleId ?? MarkupArea.desktopRouteKey,
                         name: area.displayName,
@@ -136,7 +138,7 @@ final class FeedbackBundleWriter {
         Marked areas:
         \(areasMarkdown(metadata.captures))
 
-        Marked regions are stored as x/y/width/height values in `\(FeedbackAssetNames.metadata)` under `captures[n].capture.region` (image pixels, y from the top). `capture` and `assets` also describe Area 1 for compatibility.
+        Marked regions are stored as x/y/width/height values in `\(FeedbackAssetNames.metadata)` under `captures[n].capture.region` (image pixels, y from the top). `captures[n].visibleText` is OCR of the marked region. `capture` and `assets` also describe Area 1 for compatibility.
 
         Context:
         - App under Area 1: \(primaryArea.displayName)
@@ -165,11 +167,14 @@ final class FeedbackBundleWriter {
 
     private func areasMarkdown(_ items: [FeedbackMetadata.CaptureItemMetadata]) -> String {
         items.map { item in
-            var line = "- Area \(item.index): `\(item.assets.annotatedScreenshot)` — \(item.app.name)"
+            var lines = ["- Area \(item.index): `\(item.assets.annotatedScreenshot)` — \(item.app.name)"]
             if let note = item.note, !note.isEmpty {
-                line += "\n  > \(note.replacingOccurrences(of: "\n", with: "\n  > "))"
+                lines.append("  > \(note.replacingOccurrences(of: "\n", with: "\n  > "))")
             }
-            return line
+            if let visibleText = item.visibleText, !visibleText.isEmpty {
+                lines.append("  Visible UI text: \(visibleText.joined(separator: "; "))")
+            }
+            return lines.joined(separator: "\n")
         }
         .joined(separator: "\n")
     }

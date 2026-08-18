@@ -2,52 +2,39 @@ import AppKit
 import Vision
 
 enum ScreenshotTextIndex {
-    static let maximumPhrases = 100
+    static let maximumLines = 40
 
-    static let glossary = [
-        "button", "navbar", "navigation", "sheet", "modal", "padding",
-        "screenshot", "toolbar", "sidebar", "toggle", "dropdown", "checkbox",
-        "placeholder", "overlay", "badge", "tooltip", "spacing", "alignment"
-    ]
+    /// Visible strings in the marked region, for the saved feedback bundle.
+    /// Dictation does not use this — agents read it from instruction.md.
+    static func visibleText(from image: NSImage, region: CaptureRegion) -> [String] {
+        let cgImage = image.bestCGImage()
+        let bounds = CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height)
+        let crop = CGRect(
+            x: region.x,
+            y: region.y,
+            width: region.width,
+            height: region.height
+        ).intersection(bounds)
 
-    static func phrases(from cgImage: CGImage, extras: [String]) -> [String] {
-        var ordered: [String] = []
-        var seen = Set<String>()
-
-        func append(_ raw: String) {
-            let phrase = raw
-                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard (2...48).contains(phrase.count) else { return }
-
-            let key = phrase.lowercased()
-            guard seen.insert(key).inserted else { return }
-            ordered.append(phrase)
+        let focused: CGImage
+        if crop.isNull || crop.width < 2 || crop.height < 2 {
+            focused = cgImage
+        } else {
+            focused = cgImage.cropping(to: crop) ?? cgImage
         }
 
-        for extra in extras {
-            append(extra)
-            extra.split(whereSeparator: { $0.isWhitespace || $0.isPunctuation }).forEach { token in
-                append(String(token))
-            }
+        let lines = recognizedStrings(in: focused)
+        if lines.isEmpty, focused.width != cgImage.width || focused.height != cgImage.height {
+            return recognizedStrings(in: cgImage)
         }
-
-        for observation in recognizedStrings(in: cgImage) {
-            append(observation)
-            observation.split(whereSeparator: { $0.isWhitespace }).forEach { token in
-                append(String(token))
-            }
-        }
-
-        glossary.forEach(append)
-        return Array(ordered.prefix(maximumPhrases))
+        return lines
     }
 
     private static func recognizedStrings(in cgImage: CGImage) -> [String] {
         let request = VNRecognizeTextRequest()
-        request.recognitionLevel = .fast
-        request.usesLanguageCorrection = false
-        request.minimumTextHeight = 0.015
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.minimumTextHeight = 0.012
 
         let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
         do {
@@ -61,9 +48,20 @@ enum ScreenshotTextIndex {
             lhs.confidence > rhs.confidence
         }
 
-        return observations.compactMap { observation in
-            guard observation.confidence >= 0.35 else { return nil }
-            return observation.topCandidates(1).first?.string
+        var ordered: [String] = []
+        var seen = Set<String>()
+        for observation in observations {
+            guard observation.confidence >= 0.35 else { continue }
+            guard let raw = observation.topCandidates(1).first?.string else { continue }
+            let phrase = raw
+                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard (2...80).contains(phrase.count) else { continue }
+            let key = phrase.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            ordered.append(phrase)
+            if ordered.count >= maximumLines { break }
         }
+        return ordered
     }
 }
