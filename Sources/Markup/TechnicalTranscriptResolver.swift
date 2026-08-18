@@ -15,8 +15,8 @@ struct TechnicalTranscriptResolver {
     private var learned: [String: String] = [:]
 
     mutating func learnCorrection(from previous: String, to edited: String) {
-        let oldWords = words(in: previous)
-        let newWords = words(in: edited)
+        let oldWords = Self.words(in: previous)
+        let newWords = Self.words(in: edited)
         guard oldWords.count == newWords.count, !oldWords.isEmpty else { return }
 
         for (old, new) in zip(oldWords, newWords) {
