@@ -40,7 +40,9 @@ final class LiveSelectionView: NSView {
     }()
 
     private let hintCapsule = PassthroughGlassView()
-    private let hintLabel = NSTextField(labelWithString: "Drag anywhere to mark an area — Markup is listening")
+    private let hintLabel = NSTextField(labelWithString: "Drag anywhere to mark an area")
+    private let listenCapsule = LiveListenCapsule()
+    private var listenMode: LiveListenCapsule.Mode = .off
 
     private var dragStart: NSPoint?
     private var pressedAreaID: UUID?
@@ -57,6 +59,7 @@ final class LiveSelectionView: NSView {
         layer?.backgroundColor = LiveSelectionWindow.hitTestFill.cgColor
         addSubview(previewPane)
         setupHintCapsule()
+        setupListenCapsule()
     }
 
     required init?(coder: NSCoder) {
@@ -205,7 +208,7 @@ final class LiveSelectionView: NSView {
             layers.removeValue(forKey: id)
         }
 
-        hintCapsule.isHidden = !(session?.draft.areas.isEmpty ?? true)
+        layoutSessionChrome()
         window?.invalidateCursorRects(for: self)
     }
 
@@ -371,10 +374,10 @@ final class LiveSelectionView: NSView {
                 previewTuning.cornerRadius = cornerRadius
             }
             previewPane.isHidden = false
-            hintCapsule.isHidden = true
+            layoutSessionChrome()
         } else {
             previewPane.isHidden = true
-            hintCapsule.isHidden = !(session?.draft.areas.isEmpty ?? true)
+            layoutSessionChrome()
         }
 
         NSAnimationContext.endGrouping()
@@ -399,17 +402,87 @@ final class LiveSelectionView: NSView {
         addSubview(hintCapsule)
     }
 
+    private func setupListenCapsule() {
+        listenCapsule.isHidden = true
+        addSubview(listenCapsule)
+    }
+
+    func pushAudioLevel(_ level: Float) {
+        listenCapsule.pushAudioLevel(level)
+    }
+
+    func updateListenFeedback(
+        committed: String,
+        volatile: String,
+        mode: LiveListenCapsule.Mode,
+        speechDetected: Bool
+    ) {
+        listenMode = mode
+        listenCapsule.update(
+            committed: committed,
+            volatile: volatile,
+            mode: mode,
+            speechDetected: speechDetected
+        )
+        layoutSessionChrome()
+    }
+
     override func layout() {
         super.layout()
-        let size = hintLabel.intrinsicContentSize
-        let capsuleSize = NSSize(width: size.width + 34, height: size.height + 18)
-        hintCapsule.frame = NSRect(
-            x: bounds.midX - capsuleSize.width / 2,
-            y: bounds.midY - capsuleSize.height / 2,
-            width: capsuleSize.width,
-            height: capsuleSize.height
-        )
-        hintCapsule.cornerRadius = capsuleSize.height / 2
+        layoutSessionChrome()
+    }
+
+    /// Empty-state hint, or the live listen capsule before the first area
+    /// and while a new area is being dragged (no caption chip yet).
+    private func layoutSessionChrome() {
+        let hasAreas = !(session?.draft.areas.isEmpty ?? true)
+        let hasPreview = selectionRect.map { $0.width >= 2 && $0.height >= 2 } ?? false
+        let followSelection = isDraggingSelection && hasPreview
+        let showListen = listenMode != .off && (followSelection || !hasAreas)
+
+        listenCapsule.isHidden = !showListen
+        hintCapsule.isHidden = hasAreas || hasPreview || showListen
+
+        if showListen {
+            let size = listenCapsule.fittingSize
+            let width = min(max(size.width, 168), 440)
+            let height = max(size.height, 36)
+            let frame: NSRect
+            if followSelection, let selection = selectionRect {
+                frame = clampedFrame(width: width, height: height, under: selection)
+            } else {
+                frame = NSRect(
+                    x: bounds.midX - width / 2,
+                    y: bounds.midY - height / 2,
+                    width: width,
+                    height: height
+                )
+            }
+            listenCapsule.frame = frame
+            listenCapsule.cornerRadius = min(height / 2, 18)
+        }
+
+        if !hintCapsule.isHidden {
+            let size = hintLabel.intrinsicContentSize
+            let capsuleSize = NSSize(width: size.width + 34, height: size.height + 18)
+            hintCapsule.frame = NSRect(
+                x: bounds.midX - capsuleSize.width / 2,
+                y: bounds.midY - capsuleSize.height / 2,
+                width: capsuleSize.width,
+                height: capsuleSize.height
+            )
+            hintCapsule.cornerRadius = capsuleSize.height / 2
+        }
+    }
+
+    private func clampedFrame(width: CGFloat, height: CGFloat, under selection: NSRect) -> NSRect {
+        var x = selection.midX - width / 2
+        x = min(max(x, bounds.minX + 8), max(bounds.minX + 8, bounds.maxX - width - 8))
+        var y = selection.minY - height - 10
+        if y < bounds.minY + 8 {
+            y = min(selection.maxY + 10, bounds.maxY - height - 8)
+        }
+        return NSRect(x: x, y: y, width: width, height: height)
     }
 
     private func clamp(_ point: NSPoint, to rect: NSRect) -> NSPoint {
@@ -456,6 +529,7 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
     private let titleLabel = NSTextField(labelWithString: "")
     private let deleteButton = NSButton()
     private let noteField = NSTextField()
+    private let decodeView = DecodingTranscriptView()
     private let container = NSView()
     private var isEditingNote = false
     private var lastNote = ""
@@ -519,6 +593,10 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
 
     func controlTextDidBeginEditing(_ obj: Notification) {
         isEditingNote = true
+        decodeView.isHidden = true
+        decodeView.setTranscript(committed: "", volatile: "")
+        noteField.textColor = .labelColor
+        noteField.stringValue = lastNote
         onEditingChanged?(true)
     }
 
@@ -535,27 +613,31 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
     }
 
     private func applyNoteDisplay() {
-        if lastVolatile.isEmpty {
-            noteField.stringValue = lastNote
+        if isEditingNote {
+            decodeView.isHidden = true
+            decodeView.setTranscript(committed: "", volatile: "")
             noteField.textColor = .labelColor
+            noteField.stringValue = lastNote
             return
         }
 
-        // Committed text solid, in-flight dictation dimmed — the same read
-        // the 1.x note view had.
-        let combined = NSMutableAttributedString()
-        let font = noteField.font ?? NSFont.systemFont(ofSize: 12)
-        if !lastNote.isEmpty {
-            combined.append(NSAttributedString(
-                string: lastNote + " ",
-                attributes: [.font: font, .foregroundColor: NSColor.labelColor]
-            ))
+        if lastVolatile.isEmpty {
+            decodeView.isHidden = true
+            decodeView.setTranscript(committed: "", volatile: "")
+            noteField.textColor = .labelColor
+            noteField.stringValue = lastNote
+            return
         }
-        combined.append(NSAttributedString(
-            string: lastVolatile,
-            attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor]
-        ))
-        noteField.attributedStringValue = combined
+
+        let combined = [lastNote, lastVolatile]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        noteField.stringValue = combined
+        noteField.textColor = .clear
+        decodeView.preferredMaxLayoutWidth = max(noteField.bounds.width, 300)
+        decodeView.isHidden = false
+        decodeView.setTranscript(committed: lastNote, volatile: lastVolatile)
     }
 
     private func setup() {
@@ -598,6 +680,10 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         noteField.preferredMaxLayoutWidth = 300
         noteField.delegate = self
 
+        decodeView.font = .systemFont(ofSize: 12)
+        decodeView.preferredMaxLayoutWidth = 300
+        decodeView.isHidden = true
+
         let stack = NSStackView(views: [header, noteField])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -606,6 +692,7 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
 
         container.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(stack)
+        container.addSubview(decodeView)
 
         NSLayoutConstraint.activate([
             indexBadge.centerXAnchor.constraint(equalTo: badgeContainer.centerXAnchor),
@@ -618,6 +705,10 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
             stack.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             noteField.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             noteField.trailingAnchor.constraint(equalTo: stack.trailingAnchor),
+            decodeView.leadingAnchor.constraint(equalTo: noteField.leadingAnchor),
+            decodeView.trailingAnchor.constraint(equalTo: noteField.trailingAnchor),
+            decodeView.topAnchor.constraint(equalTo: noteField.topAnchor),
+            decodeView.bottomAnchor.constraint(equalTo: noteField.bottomAnchor),
             header.leadingAnchor.constraint(equalTo: stack.leadingAnchor),
             header.trailingAnchor.constraint(equalTo: stack.trailingAnchor)
         ])
@@ -735,17 +826,22 @@ final class ListeningChipButton: NSControl {
     }
 
     var mode: Mode = .hidden {
-        didSet { applyMode() }
+        didSet {
+            guard oldValue != mode else { return }
+            applyMode()
+        }
     }
 
     var speechDetected = false {
-        didSet { applyMode() }
+        didSet {
+            guard oldValue != speechDetected else { return }
+            updateListeningBackground()
+        }
     }
 
     private let iconView = NSImageView()
+    private let meter = VoiceMeterView(barCount: 14, barColor: NSColor.white.withAlphaComponent(0.95))
     private let titleLabel = NSTextField(labelWithString: "")
-    private var pulseTimer: Timer?
-    private var pulseOn = false
 
     init() {
         super.init(frame: .zero)
@@ -770,11 +866,19 @@ final class ListeningChipButton: NSControl {
         titleLabel.lineBreakMode = .byClipping
         titleLabel.setContentHuggingPriority(.required, for: .horizontal)
 
-        let content = NSStackView(views: [iconView, titleLabel])
+        meter.setContentHuggingPriority(.required, for: .horizontal)
+        meter.setContentCompressionResistancePriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            meter.widthAnchor.constraint(equalToConstant: 46),
+            meter.heightAnchor.constraint(equalToConstant: 14)
+        ])
+
+        let content = NSStackView(views: [iconView, meter, titleLabel])
         content.translatesAutoresizingMaskIntoConstraints = false
         content.orientation = .horizontal
         content.alignment = .centerY
         content.spacing = 4
+        content.detachesHiddenViews = true
         content.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 8)
         addSubview(content)
 
@@ -794,15 +898,12 @@ final class ListeningChipButton: NSControl {
         nil
     }
 
-    deinit {
-        pulseTimer?.invalidate()
-    }
-
     override var acceptsFirstResponder: Bool { false }
 
     override var intrinsicContentSize: NSSize {
         let titleWidth = titleLabel.intrinsicContentSize.width
-        return NSSize(width: max(8 + 12 + 4 + titleWidth + 8, 88), height: 22)
+        let meterWidth: CGFloat = mode == .listening ? 46 + 4 : 0
+        return NSSize(width: max(8 + 12 + 4 + meterWidth + titleWidth + 8, 88), height: 22)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -814,12 +915,16 @@ final class ListeningChipButton: NSControl {
         sendAction(action, to: target)
     }
 
+    func pushAudioLevel(_ level: Float) {
+        guard mode == .listening else { return }
+        meter.push(level: level, speechDetected: speechDetected)
+    }
+
     private func applyMode() {
         isHidden = mode == .hidden
         isEnabled = mode != .preparing
-        pulseTimer?.invalidate()
-        pulseTimer = nil
-        pulseOn = false
+        meter.reset()
+        meter.isHidden = mode != .listening
 
         switch mode {
         case .hidden:
@@ -839,7 +944,6 @@ final class ListeningChipButton: NSControl {
             iconView.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)
             toolTip = "Click to mute. Escape also mutes."
             setAccessibilityLabel("Listening")
-            startPulse()
         case .muted:
             titleLabel.stringValue = "Muted"
             iconView.image = NSImage(systemSymbolName: "mic.slash", accessibilityDescription: nil)
@@ -854,26 +958,14 @@ final class ListeningChipButton: NSControl {
             layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.55).cgColor
         }
 
-        if mode == .listening {
-            updateListeningBackground()
-        }
-
+        updateListeningBackground()
         needsDisplay = true
         invalidateIntrinsicContentSize()
     }
 
-    private func startPulse() {
-        updateListeningBackground()
-        pulseTimer = Timer.scheduledTimer(withTimeInterval: 0.7, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.pulseOn.toggle()
-            self.updateListeningBackground()
-        }
-        pulseTimer?.tolerance = 0.1
-    }
-
     private func updateListeningBackground() {
-        let active = speechDetected || pulseOn
-        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(active ? 0.92 : 0.62).cgColor
+        guard mode == .listening else { return }
+        layer?.backgroundColor = NSColor.controlAccentColor
+            .withAlphaComponent(speechDetected ? 0.92 : 0.72).cgColor
     }
 }
