@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import CoreMedia
 import Darwin
 import Foundation
 import Speech
@@ -38,7 +39,7 @@ final class NoteDictationController {
 
     private var audioEngine: AVAudioEngine?
     private var analyzer: SpeechAnalyzer?
-    private var transcriber: DictationTranscriber?
+    private var preparedTranscriber: PreparedTranscriber?
     private var speechDetector: SpeechDetector?
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var tapInstalled = false
@@ -48,9 +49,20 @@ final class NoteDictationController {
     private var detectionTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
     private var sessionID = UUID()
-    private var contextualPhrases: [String] = []
     private var pendingStart = false
-    private var carryoverText = ""
+
+    /// Note text that already belongs to the current target (typed or
+    /// adopted from an existing area). New speech is appended to this.
+    private var baseNote = ""
+    /// Audio time at which the current target started. Results that end
+    /// at or before this are previous-area speech and are ignored.
+    private var targetStart = CMTime.zero
+    private var lastHeardEnd = CMTime.zero
+    /// In-flight utterance at the last retarget, used only to clip an
+    /// untimed result that still covers the previous area's tail.
+    private var clipPrefix = ""
+    private var targetFinalized = AttributedString()
+    private var targetVolatile = AttributedString()
 
     nonisolated static var hasMicrophoneAccess: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -67,39 +79,40 @@ final class NoteDictationController {
 
     static func prewarm() async {
         do {
-            _ = try await makeTranscriber()
+            _ = try await makeEngine()
         } catch {
             NSLog("Markup: dictation prewarm failed: \(error.localizedDescription)")
         }
     }
 
     func adoptExistingNote(_ note: String) {
+        beginNewTarget(adopting: note)
+    }
+
+    func noteWasEdited(_ note: String) {
+        baseNote = note
+        targetStart = lastHeardEnd
+        targetFinalized = AttributedString()
+        targetVolatile = AttributedString()
+        clipPrefix = ""
         committedText = note
         volatileText = ""
         publishTranscript()
     }
 
-    func noteWasEdited(_ note: String) {
+    /// Retargets the transcript stream to a new note without stopping the
+    /// analyzer. Later results are kept only if their audio starts after
+    /// this moment, so a new area never inherits earlier speech.
+    func beginNewTarget(adopting note: String = "") {
+        clipPrefix = String(targetVolatile.characters)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        baseNote = note
+        targetStart = lastHeardEnd
+        targetFinalized = AttributedString()
+        targetVolatile = AttributedString()
         committedText = note
         volatileText = ""
-    }
-
-    /// Retargets the transcript stream to a new note (a new live area)
-    /// without stopping the analyzer. The caller has already committed the
-    /// in-flight volatile text into the outgoing target; it is remembered
-    /// here so that when the transcriber finalizes the same utterance, the
-    /// portion that already landed in the previous area is not duplicated
-    /// into the new one.
-    func beginNewTarget() {
-        carryoverText = volatileText
-        committedText = ""
-        volatileText = ""
-    }
-
-    func setContextualPhrases(_ phrases: [String]) {
-        contextualPhrases = phrases
-        guard analyzer != nil else { return }
-        Task { await applyContext() }
+        publishTranscript()
     }
 
     func startListening() {
@@ -157,16 +170,25 @@ final class NoteDictationController {
         state = .preparing
         let currentSession = UUID()
         sessionID = currentSession
+        resetAudioClockKeepingNote()
 
         do {
-            let transcriber = try await Self.makeTranscriber()
+            let prepared = try await Self.makeEngine()
             guard pendingStart, sessionID == currentSession, !Task.isCancelled else { return }
+
+            let transcriberModule: any SpeechModule
+            switch prepared {
+            case .speech(let transcriber):
+                transcriberModule = transcriber
+            case .dictation(let transcriber):
+                transcriberModule = transcriber
+            }
 
             let detector = SpeechDetector(
                 detectionOptions: .init(sensitivityLevel: .medium),
                 reportResults: true
             )
-            let modules: [any SpeechModule] = [transcriber, detector]
+            let modules: [any SpeechModule] = [transcriberModule, detector]
             let engine = AVAudioEngine()
             let inputNode = engine.inputNode
             let naturalFormat = inputNode.outputFormat(forBus: 0)
@@ -184,8 +206,8 @@ final class NoteDictationController {
             let converter: PCMBufferConverter?
             if Self.formatsMatch(naturalFormat, analysisFormat) {
                 converter = nil
-            } else if let prepared = PCMBufferConverter(from: naturalFormat, to: analysisFormat) {
-                converter = prepared
+            } else if let preparedConverter = PCMBufferConverter(from: naturalFormat, to: analysisFormat) {
+                converter = preparedConverter
             } else {
                 throw MarkupError("Could not convert microphone audio for dictation.")
             }
@@ -195,7 +217,6 @@ final class NoteDictationController {
                 options: .init(priority: .userInitiated, modelRetention: .lingering)
             )
             try await analyzer.prepareToAnalyze(in: analysisFormat)
-            await applyContext(on: analyzer)
             guard pendingStart, sessionID == currentSession, !Task.isCancelled else {
                 await analyzer.cancelAndFinishNow()
                 return
@@ -231,7 +252,7 @@ final class NoteDictationController {
 
             audioEngine = engine
             self.analyzer = analyzer
-            self.transcriber = transcriber
+            preparedTranscriber = prepared
             speechDetector = detector
             inputContinuation = inputPair.continuation
             tapInstalled = true
@@ -253,9 +274,28 @@ final class NoteDictationController {
 
             resultTask = Task {
                 do {
-                    for try await result in transcriber.results {
-                        await MainActor.run {
-                            self.handle(result: result, session: currentSession)
+                    switch prepared {
+                    case .speech(let transcriber):
+                        for try await result in transcriber.results {
+                            await MainActor.run {
+                                self.handle(
+                                    range: result.range,
+                                    text: result.text,
+                                    isFinal: result.isFinal,
+                                    session: currentSession
+                                )
+                            }
+                        }
+                    case .dictation(let transcriber):
+                        for try await result in transcriber.results {
+                            await MainActor.run {
+                                self.handle(
+                                    range: result.range,
+                                    text: result.text,
+                                    isFinal: result.isFinal,
+                                    session: currentSession
+                                )
+                            }
                         }
                     }
                 } catch is CancellationError {
@@ -284,65 +324,59 @@ final class NoteDictationController {
         }
     }
 
-    private func handle(result: DictationTranscriber.Result, session: UUID) {
+    private func handle(range: CMTimeRange, text: AttributedString, isFinal: Bool, session: UUID) {
         guard sessionID == session, state == .listening else { return }
 
-        var text = String(result.text.characters)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        lastHeardEnd = CMTimeMaximum(lastHeardEnd, range.end)
 
-        if result.isFinal {
-            // A retarget can land mid-utterance. The volatile head of this
-            // utterance was already committed to the previous target; strip
-            // it so only the continuation reaches the new one.
-            if !carryoverText.isEmpty {
-                text = Self.strippingCarryover(carryoverText, from: text)
-                carryoverText = ""
-                guard !text.isEmpty else {
-                    publishTranscript()
-                    return
+        let clipped = clipToCurrentTarget(text, range: range)
+        let clippedPlain = String(clipped.characters)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clippedPlain.isEmpty else { return }
+
+        if Self.hasAudioTiming(clipped) {
+            if isFinal {
+                Self.replacing(&targetFinalized, intersecting: range, with: clipped)
+                if let overlapping = targetVolatile.rangeOfAudioTimeRangeAttributes(intersecting: range) {
+                    targetVolatile.removeSubrange(overlapping)
                 }
+            } else {
+                Self.replacing(&targetVolatile, intersecting: range, with: clipped)
             }
-            committedText = Self.join(committedText, text)
-            volatileText = ""
+        } else if isFinal {
+            targetFinalized = AttributedString(Self.join(Self.plain(targetFinalized), clippedPlain))
+            targetVolatile = AttributedString()
         } else {
-            if !carryoverText.isEmpty {
-                text = Self.strippingCarryover(carryoverText, from: text)
-                guard !text.isEmpty else { return }
-            }
-            volatileText = text
+            targetVolatile = AttributedString(clippedPlain)
         }
+
+        committedText = Self.join(baseNote, Self.plain(targetFinalized))
+        volatileText = Self.plain(targetVolatile)
         publishTranscript()
     }
 
-    private static func strippingCarryover(_ carryover: String, from text: String) -> String {
-        let normalizedCarryover = carryover.lowercased()
-        let normalizedText = text.lowercased()
-        guard normalizedText.hasPrefix(normalizedCarryover) else {
-            // The final was re-decoded and no longer matches the committed
-            // volatile head; keep it whole rather than guess at a split.
+    private func clipToCurrentTarget(_ text: AttributedString, range: CMTimeRange) -> AttributedString {
+        if targetStart > .zero, range.end <= targetStart {
+            return AttributedString()
+        }
+        if targetStart <= .zero || range.start >= targetStart {
+            clipPrefix = ""
             return text
         }
 
-        return String(text.dropFirst(carryover.count))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func applyContext() async {
-        guard let analyzer else { return }
-        await applyContext(on: analyzer)
-    }
-
-    private func applyContext(on analyzer: SpeechAnalyzer) async {
-        let context = AnalysisContext()
-        if !contextualPhrases.isEmpty {
-            context.contextualStrings[.general] = Array(contextualPhrases.prefix(ScreenshotTextIndex.maximumPhrases))
+        var output = AttributedString()
+        var hadTiming = false
+        for run in text.runs {
+            guard let timeRange = run.audioTimeRange else { continue }
+            hadTiming = true
+            guard timeRange.start >= targetStart else { continue }
+            Self.append(&output, AttributedString(text[run.range]))
         }
-        do {
-            try await analyzer.setContext(context)
-        } catch {
-            NSLog("Markup: could not set dictation context: \(error.localizedDescription)")
+        if hadTiming {
+            return output
         }
+
+        return AttributedString(Self.strippingPrefix(clipPrefix, from: String(text.characters)))
     }
 
     private func fail(_ error: Error) {
@@ -354,11 +388,26 @@ final class NoteDictationController {
     private func commitVolatile() {
         committedText = Self.join(committedText, volatileText)
         volatileText = ""
+        baseNote = committedText
+        targetStart = lastHeardEnd
+        targetFinalized = AttributedString()
+        targetVolatile = AttributedString()
+        clipPrefix = ""
         publishTranscript()
     }
 
     private func publishTranscript() {
         onTranscriptChanged?(committedText, volatileText)
+    }
+
+    private func resetAudioClockKeepingNote() {
+        lastHeardEnd = .zero
+        targetStart = .zero
+        clipPrefix = ""
+        targetFinalized = AttributedString()
+        targetVolatile = AttributedString()
+        baseNote = committedText
+        volatileText = ""
     }
 
     private func teardownSession(finalize: Bool) {
@@ -388,11 +437,11 @@ final class NoteDictationController {
         speechDetected = false
 
         let analyzerToFinish = analyzer
-        transcriber = nil
+        preparedTranscriber = nil
         speechDetector = nil
         analyzer = nil
         sessionID = UUID()
-        carryoverText = ""
+        resetAudioClockKeepingNote()
 
         guard let analyzerToFinish else { return }
         Task {
@@ -404,16 +453,31 @@ final class NoteDictationController {
         }
     }
 
-    private static func makeTranscriber() async throws -> DictationTranscriber {
+    private static func makeEngine() async throws -> PreparedTranscriber {
+        if SpeechTranscriber.isAvailable,
+           let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) {
+            let transcriber = SpeechTranscriber(
+                locale: locale,
+                preset: .timeIndexedProgressiveTranscription
+            )
+            try await ensureAssets(for: [transcriber], locale: locale)
+            NSLog("Markup: dictation engine SpeechTranscriber (\(locale.identifier))")
+            return .speech(transcriber)
+        }
+
         guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: .current) else {
             throw MarkupError("Dictation is not available for the current language.")
         }
-
         let transcriber = DictationTranscriber(
             locale: locale,
             preset: .progressiveLongDictation
         )
-        let modules: [any SpeechModule] = [transcriber]
+        try await ensureAssets(for: [transcriber], locale: locale)
+        NSLog("Markup: dictation engine DictationTranscriber fallback (\(locale.identifier))")
+        return .dictation(transcriber)
+    }
+
+    private static func ensureAssets(for modules: [any SpeechModule], locale: Locale) async throws {
         switch await AssetInventory.status(forModules: modules) {
         case .installed:
             _ = try? await AssetInventory.reserve(locale: locale)
@@ -427,7 +491,58 @@ final class NoteDictationController {
         @unknown default:
             throw MarkupError("Dictation assets are unavailable.")
         }
-        return transcriber
+    }
+
+    private static func replacing(
+        _ transcript: inout AttributedString,
+        intersecting timeRange: CMTimeRange,
+        with addition: AttributedString
+    ) {
+        guard !addition.characters.isEmpty else { return }
+        if let existing = transcript.rangeOfAudioTimeRangeAttributes(intersecting: timeRange) {
+            transcript.replaceSubrange(existing, with: addition)
+            return
+        }
+        append(&transcript, addition)
+    }
+
+    private static func append(_ transcript: inout AttributedString, _ addition: AttributedString) {
+        guard !addition.characters.isEmpty else { return }
+        if !transcript.characters.isEmpty {
+            let lastIsSpace = transcript.characters.last?.isWhitespace == true
+            let firstIsSpace = addition.characters.first?.isWhitespace == true
+            if !lastIsSpace, !firstIsSpace {
+                transcript.append(AttributedString(" "))
+            }
+        }
+        transcript.append(addition)
+    }
+
+    private static func hasAudioTiming(_ text: AttributedString) -> Bool {
+        text.runs.contains { $0.audioTimeRange != nil }
+    }
+
+    private static func plain(_ text: AttributedString) -> String {
+        String(text.characters).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Clip an untimed straddling result. Never return the whole string on
+    /// mismatch — that is how old speech used to leak into new areas.
+    private static func strippingPrefix(_ prefix: String, from text: String) -> String {
+        let needle = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+        let haystack = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return haystack }
+
+        let needleLower = needle.lowercased()
+        let haystackLower = haystack.lowercased()
+        if haystackLower.hasPrefix(needleLower) {
+            return String(haystack.dropFirst(needle.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if needleLower.hasPrefix(haystackLower) {
+            return ""
+        }
+        return ""
     }
 
     private static func join(_ leading: String, _ trailing: String) -> String {
@@ -465,6 +580,11 @@ final class NoteDictationController {
         }
         return copy
     }
+}
+
+private enum PreparedTranscriber {
+    case speech(SpeechTranscriber)
+    case dictation(DictationTranscriber)
 }
 
 private final class PCMBufferConverter {

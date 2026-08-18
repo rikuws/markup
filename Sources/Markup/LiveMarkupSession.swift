@@ -42,12 +42,13 @@ final class LiveMarkupSession: NSResponder {
     var onCancelled: (() -> Void)?
 
     private let dictation = NoteDictationController()
-    private let capturer: AreaCapturer
     private var windows: [LiveSelectionWindow] = []
     private var views: [LiveSelectionView] = []
     private var hud: SessionHUDView?
     private var isEditingActiveNote = false
-    private var contextPhrases: [String] = []
+    /// True between the start of a new-area drag and mouse-up, so speech
+    /// during the drag stays off the previous area.
+    private var pendingNewArea = false
     private var isEnded = false
     private var becomeActiveObserver: NSObjectProtocol?
     private var didPushCursor = false
@@ -56,8 +57,7 @@ final class LiveMarkupSession: NSResponder {
         !windows.isEmpty && !isEnded
     }
 
-    init(capturer: AreaCapturer) {
-        self.capturer = capturer
+    override init() {
         super.init()
         configureDictation()
     }
@@ -142,6 +142,7 @@ final class LiveMarkupSession: NSResponder {
     func end() {
         guard !isEnded else { return }
         isEnded = true
+        pendingNewArea = false
         stopActivationObserver()
         popCrosshairIfNeeded()
         dictation.teardown()
@@ -156,48 +157,88 @@ final class LiveMarkupSession: NSResponder {
 
     // MARK: - View callbacks
 
+    /// Called as soon as a drag is a real new-area gesture. Speech from this
+    /// moment on belongs to the area that will be created on mouse-up.
+    func startNewAreaDrag() {
+        guard !pendingNewArea, draft.canAddArea, draft.activeArea != nil else { return }
+
+        commitVolatileIntoActiveArea()
+        pendingNewArea = true
+        dictation.beginNewTarget()
+        refreshTexts()
+        updateHUD()
+    }
+
+    /// Drag was abandoned (too small, or the session cannot take another
+    /// area). Speech collected for the would-be area goes back to the
+    /// previous target.
+    func abortNewAreaDrag() {
+        guard pendingNewArea else { return }
+        pendingNewArea = false
+
+        guard let area = draft.activeArea else { return }
+        area.note = Self.joinNotes(area.note, dictation.committedText, dictation.volatileText)
+        area.volatileNote = ""
+        dictation.beginNewTarget(adopting: area.note)
+        refreshTexts()
+        updateHUD()
+    }
+
     func commitSelection(localRect: NSRect, in view: LiveSelectionView, releasePoint: NSPoint) {
         guard draft.canAddArea else {
             NSSound.beep()
+            abortNewAreaDrag()
             return
         }
 
         let globalRect = view.globalCGRect(forLocal: localRect)
-        guard globalRect.width >= 4, globalRect.height >= 4 else { return }
+        guard globalRect.width >= 4, globalRect.height >= 4 else {
+            abortNewAreaDrag()
+            return
+        }
 
         let owner = AreaWindowResolver.owningWindow(under: globalRect)
             .map(AreaWindowResolver.owner(for:))
 
-        commitVolatileIntoActiveArea()
-        guard let area = draft.addArea(globalRect: globalRect, owner: owner) else { return }
+        let incomingNote = dictation.committedText
+        let incomingVolatile = dictation.volatileText
+        let alreadyRetargeted = pendingNewArea
 
-        // New dictation goes to the newest area.
-        dictation.beginNewTarget()
-        dictation.noteWasEdited("")
+        if !alreadyRetargeted {
+            commitVolatileIntoActiveArea()
+        }
+
+        guard let area = draft.addArea(globalRect: globalRect, owner: owner) else {
+            abortNewAreaDrag()
+            return
+        }
+
+        pendingNewArea = false
+        area.note = incomingNote
+        area.volatileNote = incomingVolatile
         isEditingActiveNote = false
 
         refreshAll()
         view.runWave(areaID: area.id, releasePoint: releasePoint)
-        refreshDictationContext(for: area)
     }
 
     func activateArea(id: UUID) {
         guard draft.activeAreaID != id, draft.areas.contains(where: { $0.id == id }) else { return }
 
+        abortNewAreaDrag()
         commitVolatileIntoActiveArea()
         draft.activate(id)
-        dictation.beginNewTarget()
-        dictation.noteWasEdited(draft.activeArea?.note ?? "")
+        dictation.beginNewTarget(adopting: draft.activeArea?.note ?? "")
         refreshAll()
     }
 
     func removeArea(id: UUID) {
+        abortNewAreaDrag()
         let wasActive = draft.activeAreaID == id
         draft.removeArea(id: id)
 
         if wasActive {
-            dictation.beginNewTarget()
-            dictation.noteWasEdited(draft.activeArea?.note ?? "")
+            dictation.beginNewTarget(adopting: draft.activeArea?.note ?? "")
             isEditingActiveNote = false
         }
 
@@ -268,6 +309,7 @@ final class LiveMarkupSession: NSResponder {
     }
 
     func requestSave() {
+        abortNewAreaDrag()
         commitVolatileIntoActiveArea()
 
         guard draft.isComplete else {
@@ -301,12 +343,21 @@ final class LiveMarkupSession: NSResponder {
         }
         dictation.onTranscriptChanged = { [weak self] committed, volatile in
             guard let self, !self.isEditingActiveNote else { return }
-            guard let area = self.draft.activeArea else { return }
+            // During a new-area drag the controller already holds only this
+            // target's speech; do not write it onto the previous area.
+            guard !self.pendingNewArea, let area = self.draft.activeArea else { return }
             area.note = committed
             area.volatileNote = volatile
             self.refreshTexts()
             self.updateHUD()
         }
+    }
+
+    private static func joinNotes(_ parts: String...) -> String {
+        parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private func commitVolatileIntoActiveArea() {
@@ -316,51 +367,11 @@ final class LiveMarkupSession: NSResponder {
     }
 
     private func commitAllVolatile() {
+        abortNewAreaDrag()
         for area in draft.areas {
             area.note = area.combinedNote
             area.volatileNote = ""
         }
-    }
-
-    /// OCR the pixels under a fresh area (session windows are excluded from
-    /// the capture, so the glass never pollutes the sample) and fold the
-    /// recognized labels into the dictation vocabulary. Runs off the main
-    /// thread; the capture helper blocks its thread while ScreenCaptureKit
-    /// works.
-    private func refreshDictationContext(for area: MarkupArea) {
-        var extras = [area.displayName, area.routeName]
-        if let owner = area.owner {
-            extras.append(owner.windowTitle)
-            if let title = owner.browserPage?.title {
-                extras.append(title)
-            }
-        }
-
-        let rect = area.globalRect
-        let capturer = capturer
-        Task.detached { [weak self] in
-            let snapshot = capturer.captureAreaSnapshot(rect)
-            let phrases: [String]
-            if let cgImage = snapshot?.bestCGImage() {
-                phrases = ScreenshotTextIndex.phrases(from: cgImage, extras: extras)
-            } else {
-                phrases = extras
-            }
-            await MainActor.run {
-                self?.mergeContextPhrases(phrases)
-            }
-        }
-    }
-
-    private func mergeContextPhrases(_ phrases: [String]) {
-        var seen = Set(contextPhrases.map { $0.lowercased() })
-        for phrase in phrases where seen.insert(phrase.lowercased()).inserted {
-            contextPhrases.append(phrase)
-        }
-        if contextPhrases.count > ScreenshotTextIndex.maximumPhrases {
-            contextPhrases = Array(contextPhrases.suffix(ScreenshotTextIndex.maximumPhrases))
-        }
-        dictation.setContextualPhrases(contextPhrases)
     }
 
     // MARK: - Rendering

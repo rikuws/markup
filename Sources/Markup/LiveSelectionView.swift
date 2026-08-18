@@ -140,6 +140,7 @@ final class LiveSelectionView: NSView {
             // on top of an existing one.
             pressedAreaID = nil
             isDraggingSelection = true
+            session?.startNewAreaDrag()
         }
 
         let clamped = clamp(point, to: bounds)
@@ -163,6 +164,7 @@ final class LiveSelectionView: NSView {
 
         if isDraggingSelection {
             guard let selectionRect, selectionRect.width >= 12, selectionRect.height >= 12 else {
+                session?.abortNewAreaDrag()
                 return
             }
             session?.commitSelection(localRect: selectionRect, in: self, releasePoint: point)
