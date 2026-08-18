@@ -69,12 +69,12 @@ final class DecodingTranscriptView: NSView {
     override var intrinsicContentSize: NSSize {
         let text = Self.joined(committed, volatile)
         guard !text.isEmpty else { return .zero }
-        let rect = NSAttributedString(string: text, attributes: [.font: font])
+        let rect = NSAttributedString(string: text, attributes: Self.layoutAttributes(font: font))
             .boundingRect(
-                with: NSSize(width: preferredMaxLayoutWidth, height: 400),
+                with: NSSize(width: preferredMaxLayoutWidth, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading]
             )
-        return NSSize(width: min(preferredMaxLayoutWidth, ceil(rect.width)), height: ceil(rect.height))
+        return NSSize(width: min(preferredMaxLayoutWidth, ceil(rect.width)), height: ceil(rect.height) + 4)
     }
 
     func setTranscript(committed: String, volatile: String) {
@@ -88,18 +88,9 @@ final class DecodingTranscriptView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let text = NSMutableAttributedString()
-        let committedAttrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.labelColor
-        ]
-        let lockedAttrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.labelColor.withAlphaComponent(0.86)
-        ]
-        let unlockedAttrs: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.secondaryLabelColor
-        ]
+        let committedAttrs = Self.layoutAttributes(font: font, color: NSColor.labelColor)
+        let lockedAttrs = Self.layoutAttributes(font: font, color: NSColor.labelColor.withAlphaComponent(0.86))
+        let unlockedAttrs = Self.layoutAttributes(font: font, color: NSColor.secondaryLabelColor)
 
         if !committed.isEmpty {
             text.append(NSAttributedString(string: committed, attributes: committedAttrs))
@@ -218,6 +209,19 @@ final class DecodingTranscriptView: NSView {
         if left.isEmpty { return right }
         if right.isEmpty { return left }
         return left + " " + right
+    }
+
+    private static func layoutAttributes(font: NSFont, color: NSColor? = nil) -> [NSAttributedString.Key: Any] {
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .paragraphStyle: style
+        ]
+        if let color {
+            attributes[.foregroundColor] = color
+        }
+        return attributes
     }
 
     private static let lowerGlyphs = Array("aeiouyrtnslhcdmpbfgwkvxqz")

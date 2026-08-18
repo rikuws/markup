@@ -215,11 +215,14 @@ final class LiveSelectionView: NSView {
     /// Text-only refresh so live transcription does not rebuild layout or
     /// interrupt wave animations.
     func refreshChipTexts(areas: [(area: MarkupArea, index: Int)], activeID: UUID?) {
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
         for entry in areas {
             guard let layer = layers[entry.area.id] else { continue }
             applyChipContent(layer.chip, area: entry.area, index: entry.index, isActive: entry.area.id == activeID)
             positionChip(layer)
         }
+        NSAnimationContext.endGrouping()
     }
 
     func runWave(areaID: UUID, releasePoint: NSPoint?) {
@@ -275,6 +278,10 @@ final class LiveSelectionView: NSView {
         layer.chip.onEditingChanged = { [weak self] isEditing in
             self?.session?.noteEditingChanged(id: id, isEditing: isEditing)
         }
+        layer.chip.onSizeInvalidated = { [weak self, weak layer] in
+            guard let self, let layer else { return }
+            self.positionChip(layer)
+        }
         return layer
     }
 
@@ -318,10 +325,25 @@ final class LiveSelectionView: NSView {
 
     private func positionChip(_ layer: AreaLayer) {
         let selection = layer.localRect
-        let size = layer.chip.fittingSize
-        let width = min(max(selection.width, 260), 360)
-        let height = max(size.height, 58)
+        let width = min(max(selection.width, AreaChipView.minWidth), AreaChipView.maxWidth)
+        let maxHeight = max(bounds.height - 16, AreaChipView.minHeight)
+        let height = layer.chip.sizeThatFits(width: width, maxHeight: maxHeight).height
+        applyChipFrame(layer, selection: selection, width: width, height: height)
+        layer.chip.layoutContent()
 
+        let synced = layer.chip.syncHeightToPlacedWidth(maxHeight: maxHeight)
+        if abs(synced - height) > 0.5 {
+            applyChipFrame(layer, selection: selection, width: width, height: synced)
+            layer.chip.layoutContent()
+        }
+    }
+
+    private func applyChipFrame(
+        _ layer: AreaLayer,
+        selection: NSRect,
+        width: CGFloat,
+        height: CGFloat
+    ) {
         var x = selection.minX
         x = min(max(x, bounds.minX + 8), bounds.maxX - width - 8)
 
@@ -333,7 +355,6 @@ final class LiveSelectionView: NSView {
         }
 
         layer.chip.frame = NSRect(x: x, y: y, width: width, height: height)
-        layer.chip.layoutContent()
     }
 
     private func localRect(forGlobalCG globalRect: CGRect) -> NSRect {
@@ -444,9 +465,13 @@ final class LiveSelectionView: NSView {
         hintCapsule.isHidden = hasAreas || hasPreview || showListen
 
         if showListen {
+            let maxWidth: CGFloat = 560
+            listenCapsule.prepare(maxWidth: maxWidth)
+            let intrinsic = listenCapsule.fittingSize
+            let width = min(max(intrinsic.width, 200), maxWidth)
+            listenCapsule.prepare(maxWidth: width)
             let size = listenCapsule.fittingSize
-            let width = min(max(size.width, 168), 440)
-            let height = max(size.height, 36)
+            let height = max(size.height, 40)
             let frame: NSRect
             if followSelection, let selection = selectionRect {
                 frame = clampedFrame(width: width, height: height, under: selection)
@@ -519,10 +544,15 @@ final class ActiveAreaStrokeView: NSView {
 /// dictation writes into it while it is not being edited. Clicking the chip
 /// retargets dictation to its area.
 final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
+    static let minWidth: CGFloat = 360
+    static let maxWidth: CGFloat = 560
+    static let minHeight: CGFloat = 92
+
     var onActivate: (() -> Void)?
     var onDelete: (() -> Void)?
     var onNoteEdited: ((String) -> Void)?
     var onEditingChanged: ((Bool) -> Void)?
+    var onSizeInvalidated: (() -> Void)?
 
     private let indexBadge = NSTextField(labelWithString: "")
     private let badgeContainer = NSView()
@@ -531,14 +561,20 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
     private let noteField = NSTextField()
     private let decodeView = DecodingTranscriptView()
     private let container = NSView()
+    private let noteFont = NSFont.systemFont(ofSize: 13, weight: .regular)
+    private var noteHeightConstraint: NSLayoutConstraint?
     private var isEditingNote = false
+    private var isApplyingDisplay = false
     private var lastNote = ""
     private var lastVolatile = ""
+
+    private static let horizontalInset: CGFloat = 14
+    private static let verticalInset: CGFloat = 12
 
     init() {
         super.init(frame: .zero)
         style = .regular
-        cornerRadius = 12
+        cornerRadius = 14
         setup()
     }
 
@@ -584,9 +620,32 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         container.layoutSubtreeIfNeeded()
     }
 
-    override var fittingSize: NSSize {
-        let size = container.fittingSize
-        return NSSize(width: size.width + 24, height: size.height + 20)
+    func sizeThatFits(width: CGFloat, maxHeight: CGFloat) -> NSSize {
+        applyWrapWidth(max(width - Self.horizontalInset * 2, 1))
+        refreshNoteHeight()
+        container.layoutSubtreeIfNeeded()
+        return NSSize(width: width, height: fittedHeight(maxHeight: maxHeight))
+    }
+
+    func syncHeightToPlacedWidth(maxHeight: CGFloat) -> CGFloat {
+        let wrap = noteField.bounds.width
+        guard wrap > 8 else {
+            return fittedHeight(maxHeight: maxHeight)
+        }
+        applyWrapWidth(wrap)
+        refreshNoteHeight()
+        container.layoutSubtreeIfNeeded()
+        return fittedHeight(maxHeight: maxHeight)
+    }
+
+    private func fittedHeight(maxHeight: CGFloat) -> CGFloat {
+        var fitted = container.fittingSize.height + Self.verticalInset * 2
+        if fitted > maxHeight, let constraint = noteHeightConstraint {
+            constraint.constant = max(constraint.constant - (fitted - maxHeight), 20)
+            container.layoutSubtreeIfNeeded()
+            fitted = container.fittingSize.height + Self.verticalInset * 2
+        }
+        return min(max(fitted, Self.minHeight), maxHeight)
     }
 
     // MARK: - NSTextFieldDelegate
@@ -604,20 +663,27 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         isEditingNote = false
         onEditingChanged?(false)
         applyNoteDisplay()
+        onSizeInvalidated?()
     }
 
     func controlTextDidChange(_ obj: Notification) {
+        guard !isApplyingDisplay else { return }
         lastNote = noteField.stringValue
         lastVolatile = ""
         onNoteEdited?(noteField.stringValue)
+        onSizeInvalidated?()
     }
 
     private func applyNoteDisplay() {
+        isApplyingDisplay = true
+        defer { isApplyingDisplay = false }
+
         if isEditingNote {
             decodeView.isHidden = true
             decodeView.setTranscript(committed: "", volatile: "")
             noteField.textColor = .labelColor
             noteField.stringValue = lastNote
+            refreshNoteHeight()
             return
         }
 
@@ -626,18 +692,58 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
             decodeView.setTranscript(committed: "", volatile: "")
             noteField.textColor = .labelColor
             noteField.stringValue = lastNote
+            refreshNoteHeight()
             return
         }
 
-        let combined = [lastNote, lastVolatile]
+        let combined = displayedNoteText
+        noteField.stringValue = combined
+        noteField.textColor = .clear
+        decodeView.isHidden = false
+        decodeView.setTranscript(committed: lastNote, volatile: lastVolatile)
+        refreshNoteHeight()
+    }
+
+    private var displayedNoteText: String {
+        [lastNote, lastVolatile]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-        noteField.stringValue = combined
-        noteField.textColor = .clear
-        decodeView.preferredMaxLayoutWidth = max(noteField.bounds.width, 300)
-        decodeView.isHidden = false
-        decodeView.setTranscript(committed: lastNote, volatile: lastVolatile)
+    }
+
+    private func applyWrapWidth(_ textWidth: CGFloat) {
+        if noteField.preferredMaxLayoutWidth != textWidth {
+            noteField.preferredMaxLayoutWidth = textWidth
+        }
+        decodeView.preferredMaxLayoutWidth = textWidth
+    }
+
+    private func refreshNoteHeight() {
+        let text = displayedNoteText
+        let sample = text.isEmpty ? (noteField.placeholderString ?? " ") : text
+        let wrap = max(noteField.preferredMaxLayoutWidth, 1)
+        let cellHeight = noteField.cell?.cellSize(
+            forBounds: NSRect(x: 0, y: 0, width: wrap, height: 10_000)
+        ).height ?? 0
+        let measured = max(ceil(cellHeight), Self.height(of: sample, font: noteFont, width: wrap))
+        let line = ceil(noteFont.ascender - noteFont.descender + noteFont.leading)
+        let minNote = max(line * 2, 40)
+        noteHeightConstraint?.constant = max(measured, minNote)
+    }
+
+    private static func height(of text: String, font: NSFont, width: CGFloat) -> CGFloat {
+        guard !text.isEmpty else { return 0 }
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byWordWrapping
+        let rect = NSAttributedString(
+            string: text,
+            attributes: [.font: font, .paragraphStyle: style]
+        )
+            .boundingRect(
+                with: NSSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading]
+            )
+        return ceil(rect.height) + 4
     }
 
     private func setup() {
@@ -651,7 +757,7 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         badgeContainer.layer?.cornerRadius = 9
         badgeContainer.addSubview(indexBadge)
 
-        titleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
@@ -668,26 +774,33 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         header.spacing = 8
 
         noteField.placeholderString = "Say or type what should change…"
-        noteField.font = .systemFont(ofSize: 12)
+        noteField.font = noteFont
         noteField.isBordered = false
         noteField.drawsBackground = false
         noteField.focusRingType = .none
         noteField.lineBreakMode = .byWordWrapping
         noteField.usesSingleLineMode = false
-        noteField.maximumNumberOfLines = 4
+        noteField.maximumNumberOfLines = 0
         noteField.cell?.wraps = true
         noteField.cell?.isScrollable = false
-        noteField.preferredMaxLayoutWidth = 300
+        (noteField.cell as? NSTextFieldCell)?.truncatesLastVisibleLine = false
+        noteField.preferredMaxLayoutWidth = Self.maxWidth - Self.horizontalInset * 2
+        noteField.setContentHuggingPriority(.required, for: .vertical)
+        noteField.setContentCompressionResistancePriority(.required, for: .vertical)
         noteField.delegate = self
 
-        decodeView.font = .systemFont(ofSize: 12)
-        decodeView.preferredMaxLayoutWidth = 300
+        decodeView.font = noteFont
+        decodeView.preferredMaxLayoutWidth = noteField.preferredMaxLayoutWidth
         decodeView.isHidden = true
+
+        let height = noteField.heightAnchor.constraint(equalToConstant: 36)
+        height.priority = .required
+        noteHeightConstraint = height
 
         let stack = NSStackView(views: [header, noteField])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 6
+        stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         container.translatesAutoresizingMaskIntoConstraints = false
@@ -699,6 +812,7 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
             indexBadge.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor),
             badgeContainer.widthAnchor.constraint(equalToConstant: 22),
             badgeContainer.heightAnchor.constraint(equalToConstant: 18),
+            height,
             stack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             stack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             stack.topAnchor.constraint(equalTo: container.topAnchor),
@@ -714,14 +828,16 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         ])
 
         let content = NSView()
+        content.autoresizingMask = [.width, .height]
         content.addSubview(container)
         NSLayoutConstraint.activate([
-            container.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
-            container.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
-            container.topAnchor.constraint(equalTo: content.topAnchor, constant: 10),
-            container.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -10)
+            container.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: Self.horizontalInset),
+            container.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -Self.horizontalInset),
+            container.topAnchor.constraint(equalTo: content.topAnchor, constant: Self.verticalInset),
+            container.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -Self.verticalInset)
         ])
         contentView = content
+        refreshNoteHeight()
     }
 
     @objc private func deleteClicked() {

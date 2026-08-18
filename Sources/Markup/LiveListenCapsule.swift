@@ -40,10 +40,17 @@ final class LiveListenCapsule: NSGlassEffectView {
         }
     }
 
+    /// Horizontal chrome around the transcript: glass insets plus the meter.
+    private static let horizontalChrome: CGFloat = 28 + 84 + 10
+
     override var fittingSize: NSSize {
         container.layoutSubtreeIfNeeded()
         let size = container.fittingSize
         return NSSize(width: size.width + 28, height: size.height + 20)
+    }
+
+    func prepare(maxWidth: CGFloat) {
+        decodeView.preferredMaxLayoutWidth = max(80, maxWidth - Self.horizontalChrome)
     }
 
     func update(
@@ -100,8 +107,9 @@ final class LiveListenCapsule: NSGlassEffectView {
         fallbackLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         decodeView.font = .systemFont(ofSize: 13, weight: .medium)
-        decodeView.preferredMaxLayoutWidth = 320
+        decodeView.preferredMaxLayoutWidth = 420
         decodeView.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        decodeView.setContentCompressionResistancePriority(.required, for: .vertical)
 
         let stack = NSStackView(views: [meter, fallbackLabel, decodeView])
         stack.orientation = .horizontal
