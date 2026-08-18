@@ -44,6 +44,7 @@ struct SettingsView: View {
                     permissionsSection
                     updatesSection
                     topNotchSection
+                    dictationEngineSection
                     hotKeySection
                     routesSection
                 }
@@ -208,6 +209,35 @@ struct SettingsView: View {
                 Label("Show the feedback notch on the main display", systemImage: "tray.full")
             }
             .toggleStyle(.checkbox)
+        }
+    }
+
+    private var dictationEngineSection: some View {
+        SettingsSection(
+            title: "Dictation engine",
+            subtitle: "Prototype switch. Apple streams live text. Parakeet records, then transcribes locally with FluidAudio after you mute or retarget."
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Picker(
+                    selection: Binding(
+                        get: { settingsStore.settings.dictationEngine },
+                        set: { settingsStore.updateDictationEngine($0) }
+                    )
+                ) {
+                    ForEach(TranscriptionEngineKind.allCases, id: \.self) { engine in
+                        Text(engine.displayName).tag(engine)
+                    }
+                } label: {
+                    EmptyView()
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                Text("Parakeet downloads the multilingual TDT 0.6B v3 CoreML model on first use into Application Support. Console logs compare stop-to-text latency as [Dictation].")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

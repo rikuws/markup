@@ -84,6 +84,17 @@ final class SettingsStore: ObservableObject {
         save()
     }
 
+    func updateDictationEngine(_ engine: TranscriptionEngineKind) {
+        guard settings.dictationEngine != engine else { return }
+        var next = settings
+        next.dictationEngine = engine
+        settings = next
+        save()
+        Task {
+            await NoteDictationController.prewarm(engine: engine)
+        }
+    }
+
     private func save() {
         do {
             try FileManager.default.createDirectory(

@@ -41,7 +41,7 @@ final class LiveMarkupSession: NSResponder {
     var onSaveRequested: (() -> Void)?
     var onCancelled: (() -> Void)?
 
-    private let dictation = NoteDictationController()
+    private let dictation: NoteDictationController
     /// The app that was frontmost when the session started, before Markup
     /// activated. Used to break ties when a larger window (often a browser
     /// overlay) is listed in front of the window the user was actually on.
@@ -54,6 +54,7 @@ final class LiveMarkupSession: NSResponder {
     /// during the drag stays off the previous area.
     private var pendingNewArea = false
     private var isEnded = false
+    private var isSaving = false
     private var becomeActiveObserver: NSObjectProtocol?
     private var didPushCursor = false
 
@@ -61,8 +62,9 @@ final class LiveMarkupSession: NSResponder {
         !windows.isEmpty && !isEnded
     }
 
-    init(originProcessID: pid_t? = nil) {
+    init(originProcessID: pid_t? = nil, dictationEngine: TranscriptionEngineKind = .appleSpeech) {
         self.originProcessID = originProcessID
+        self.dictation = NoteDictationController(engineKind: dictationEngine)
         super.init()
         configureDictation()
     }
@@ -165,13 +167,23 @@ final class LiveMarkupSession: NSResponder {
     /// Called as soon as a drag is a real new-area gesture. Speech from this
     /// moment on belongs to the area that will be created on mouse-up.
     func startNewAreaDrag() {
-        guard !pendingNewArea, draft.canAddArea, draft.activeArea != nil else { return }
+        guard !pendingNewArea, draft.canAddArea, let previous = draft.activeArea else { return }
 
-        commitVolatileIntoActiveArea()
         pendingNewArea = true
+        if !dictation.usesBatchTranscription {
+            commitVolatileIntoActiveArea()
+        }
         dictation.beginNewTarget()
         refreshTexts()
         updateHUD()
+
+        guard dictation.usesBatchTranscription else { return }
+        Task { @MainActor in
+            let spoken = await self.dictation.transcribeHeldAudio()
+            previous.note = Self.joinNotes(previous.note, spoken)
+            self.refreshTexts()
+            self.updateHUD()
+        }
     }
 
     /// Drag was abandoned (too small, or the session cannot take another
@@ -182,9 +194,13 @@ final class LiveMarkupSession: NSResponder {
         pendingNewArea = false
 
         guard let area = draft.activeArea else { return }
-        area.note = Self.joinNotes(area.note, dictation.committedText, dictation.volatileText)
-        area.volatileNote = ""
-        dictation.beginNewTarget(adopting: area.note)
+        if dictation.usesBatchTranscription {
+            dictation.resumeTarget(adopting: area.note)
+        } else {
+            area.note = Self.joinNotes(area.note, dictation.committedText, dictation.volatileText)
+            area.volatileNote = ""
+            dictation.beginNewTarget(adopting: area.note)
+        }
         refreshTexts()
         updateHUD()
     }
@@ -240,10 +256,16 @@ final class LiveMarkupSession: NSResponder {
         guard draft.activeAreaID != id, draft.areas.contains(where: { $0.id == id }) else { return }
 
         abortNewAreaDrag()
-        commitVolatileIntoActiveArea()
-        draft.activate(id)
-        dictation.beginNewTarget(adopting: draft.activeArea?.note ?? "")
-        refreshAll()
+        Task { @MainActor in
+            await self.dictation.finalizeCurrentUtterance()
+            self.commitVolatileIntoActiveArea()
+            self.draft.activate(id)
+            self.dictation.beginNewTarget(
+                adopting: self.draft.activeArea?.note ?? "",
+                captureHeldAudio: false
+            )
+            self.refreshAll()
+        }
     }
 
     func removeArea(id: UUID) {
@@ -252,7 +274,10 @@ final class LiveMarkupSession: NSResponder {
         draft.removeArea(id: id)
 
         if wasActive {
-            dictation.beginNewTarget(adopting: draft.activeArea?.note ?? "")
+            dictation.beginNewTarget(
+                adopting: draft.activeArea?.note ?? "",
+                captureHeldAudio: false
+            )
             isEditingActiveNote = false
         }
 
@@ -304,6 +329,9 @@ final class LiveMarkupSession: NSResponder {
 
         switch event.keyCode {
         case 53: // Escape: mute first, cancel second.
+            if dictation.state == .transcribing {
+                return true
+            }
             if dictation.isListening || dictation.state == .preparing {
                 dictation.mute()
                 return true
@@ -325,22 +353,28 @@ final class LiveMarkupSession: NSResponder {
     }
 
     func requestSave() {
+        guard !isSaving else { return }
         abortNewAreaDrag()
-        commitVolatileIntoActiveArea()
+        isSaving = true
+        Task { @MainActor in
+            await self.dictation.finalizeCurrentUtterance()
+            self.commitVolatileIntoActiveArea()
 
-        guard draft.isComplete else {
-            NSSound.beep()
-            // Retarget dictation at the first area still missing a note so
-            // the user can just start talking.
-            if let missing = draft.firstAreaMissingNote {
-                activateArea(id: missing.id)
-            } else {
-                refreshAll()
+            guard self.draft.isComplete else {
+                self.isSaving = false
+                NSSound.beep()
+                // Retarget dictation at the first area still missing a note so
+                // the user can just start talking.
+                if let missing = self.draft.firstAreaMissingNote {
+                    self.activateArea(id: missing.id)
+                } else {
+                    self.refreshAll()
+                }
+                return
             }
-            return
-        }
 
-        onSaveRequested?()
+            self.onSaveRequested?()
+        }
     }
 
     func cancel() {
@@ -389,6 +423,7 @@ final class LiveMarkupSession: NSResponder {
             switch dictation.state {
             case .preparing: return .preparing
             case .listening: return .listening
+            case .transcribing: return .transcribing
             default: return .off
             }
         }()
@@ -490,6 +525,7 @@ final class LiveMarkupSession: NSResponder {
             case .idle: return .muted
             case .preparing: return .preparing
             case .listening: return .listening
+            case .transcribing: return .transcribing
             case .muted: return .muted
             case .unavailable: return .unavailable
             }

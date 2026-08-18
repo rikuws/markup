@@ -47,6 +47,22 @@ Do not call the OpenAI Whisper API. Do not add `SFSpeechRecognizer`. Do not feed
 
 Revisit WhisperKit only if live `SpeechTranscriber` plus the resolver still mangles UI jargon. Same overlay UX; swap the transcriber, do not change the gesture. Do not add a Foundation Models rewrite pass unless the resolver still misses terms — unconstrained “fix this transcript” prompts will rephrase the user’s speech.
 
+## Prototype: Parakeet TDT 0.6B v3 (FluidAudio)
+
+ASR is now behind `TranscriptionEngine`. Apple `SpeechAnalyzer` stays the default and keeps live volatile text. Parakeet is a batch path for stop-to-text comparison:
+
+```text
+start listening → capture 16 kHz mono PCM in memory → mute / retarget / save → Parakeet transcribe → TechnicalTranscriptResolver → insert
+```
+
+Switch engines in **Settings → Dictation engine**. The first Parakeet prepare downloads `FluidInference/parakeet-tdt-0.6b-v3-coreml` into `~/Library/Application Support/FluidAudio/Models/` and keeps `AsrManager` warm for the process. Console lines tagged `[Dictation]` report `audioDuration`, `inference`, `stopToText`, and `rtfx`.
+
+Parakeet does not stream partials. The HUD shows **Transcribing** after mute. FluidAudio CTC custom-vocabulary boosting exists for batch TDT but needs a second 110M CTC model and is not wired; keep `TechnicalTranscriptResolver` as the post-ASR correction seam.
+
+`Language` on `AsrManager.transcribe` is a Latin/Cyrillic/Greek script filter, not a Finnish-vs-English language lock. Mixed Finnish + English technical speech stays Latin. FluidAudio’s FLEURS notes put Finnish around 13% WER; v3 can lag v2 on rare English tokens.
+
+This Linux Cloud Agent VM cannot compile or launch Markup, so stop-to-text numbers must be collected on a Mac. Apple’s `[Dictation]` `inference` is 0 because text already streamed; `stopToText` is mute-to-commit. Parakeet’s `inference` is CoreML time and `stopToText` is mute-to-insert.
+
 ## Visible UI text in the bundle, not in the recognizer
 
 A coworker can see the labels on screen. The agent can too, if we write them down.
@@ -78,7 +94,11 @@ Keep the session view first responder while listening. Gate Escape (mute vs canc
 | --- | --- |
 | `Sources/Markup/Resources/Markup.entitlements` | Hardened-runtime audio input. |
 | `scripts/build-app.sh` | `--entitlements`; microphone usage string. |
-| `Sources/Markup/NoteDictationController.swift` | `SpeechTranscriber` without `.fastResults`, alternatives, VAD, volatile/final text, time-range retargeting, mute, live mic level. |
+| `Sources/Markup/NoteDictationController.swift` | Session lifecycle, Apple streaming, Parakeet capture/flush, mute, live mic level. |
+| `Sources/Markup/TranscriptionEngine.swift` | Swappable ASR protocol and latency logs. |
+| `Sources/Markup/AppleSpeechTranscriptionEngine.swift` | `SpeechTranscriber` / `DictationTranscriber` prepare + optional batch transcribe. |
+| `Sources/Markup/ParakeetTranscriptionEngine.swift` | FluidAudio Parakeet TDT 0.6B v3, process-lifetime warmup. |
+| `Sources/Markup/DictationAudio.swift` | Shared mic conversion, 16 kHz sample accumulator, level meter. |
 | `Sources/Markup/TechnicalTranscriptResolver.swift` | Alternative reranking, homophone rewrite, session vocabulary. |
 | `Sources/Markup/LiveMarkupSession.swift` | Auto-listen, retarget at new-area drag start, Escape gating, listen-feedback forwarding. |
 | `Sources/Markup/LiveSelectionView.swift` | HUD waveform, follow-capsule while dragging / before first area, decode overlay on the caption chip. |
@@ -88,6 +108,7 @@ Keep the session view first responder while listening. Gate Escape (mute vs canc
 | `Sources/Markup/ScreenshotTextIndex.swift` | Save-time Vision OCR → bundle `visibleText`. |
 | `Sources/Markup/FeedbackBundleWriter.swift` | Write visible UI text into `instruction.md` and metadata. |
 | `Sources/Markup/CaptureCoordinator.swift` | Pre-warm on session start. |
+| `Sources/Markup/SettingsStore.swift` / `Models.swift` / `SettingsWindowController.swift` | Persist and switch `dictationEngine`. |
 | `README.md` | Mark and talk; on-device; mic permission. |
 
 ## Mac test checklist
@@ -105,3 +126,4 @@ Keep the session view first responder while listening. Gate Escape (mute vs canc
   - “make the UI feel lighter” / “the UX is confusing” / “open the API”
   - “use SwiftUI” / “the Figma version looks better”
   - “you should change the UI” / “I think you should simplify the UI”
+- Parakeet prototype: Settings → Dictation engine → Parakeet. First run downloads the CoreML model. Speak 3–5 seconds, mute, confirm text appears promptly. Console should log `[Dictation] engine=Parakeet ...`. Switch back to Apple and compare `stopToText`. Mixed Finnish + English technical phrases should stay Latin-script.
