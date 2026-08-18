@@ -161,13 +161,19 @@ final class LiveSelectionView: NSView {
         }
 
         let point = convert(event.locationInWindow, from: nil)
+        let originPoint = dragStart ?? point
 
         if isDraggingSelection {
             guard let selectionRect, selectionRect.width >= 12, selectionRect.height >= 12 else {
                 session?.abortNewAreaDrag()
                 return
             }
-            session?.commitSelection(localRect: selectionRect, in: self, releasePoint: point)
+            session?.commitSelection(
+                localRect: selectionRect,
+                in: self,
+                originPoint: originPoint,
+                releasePoint: point
+            )
             return
         }
 
@@ -338,6 +344,13 @@ final class LiveSelectionView: NSView {
         let windowRect = convert(rect, to: nil)
         let cocoa = window.convertToScreen(windowRect)
         return ScreenGeometry.cgRect(fromCocoa: cocoa)
+    }
+
+    func globalCGPoint(forLocal point: NSPoint) -> CGPoint {
+        guard let window else { return .zero }
+        let windowPoint = convert(point, to: nil)
+        let cocoa = window.convertPoint(toScreen: windowPoint)
+        return ScreenGeometry.cgPoint(fromCocoa: cocoa)
     }
 
     // MARK: - Preview + hint

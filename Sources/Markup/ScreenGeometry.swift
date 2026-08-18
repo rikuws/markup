@@ -8,8 +8,22 @@ import AppKit
 enum ScreenGeometry {
     /// The primary display (the one carrying the menu bar) has Cocoa origin
     /// (0, 0), so its frame height is the flip line for the whole desktop.
+    /// Use the Core Graphics main-display height, not `NSScreen.screens.first`:
+    /// that array is keyed by the current key window, which during a session
+    /// is Markup's overlay and may be a secondary display.
     static var primaryScreenHeight: CGFloat {
-        NSScreen.screens.first?.frame.height ?? 0
+        CGDisplayBounds(CGMainDisplayID()).height
+    }
+
+    /// Each attached display in CG coordinates (origin top-left of the
+    /// primary display), matching `CGWindowList` bounds.
+    static func displayBounds() -> [CGRect] {
+        NSScreen.screens.compactMap { screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return nil
+            }
+            return CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+        }
     }
 
     static func cgRect(fromCocoa rect: NSRect) -> CGRect {

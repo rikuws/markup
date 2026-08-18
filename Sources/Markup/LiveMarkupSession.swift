@@ -42,6 +42,10 @@ final class LiveMarkupSession: NSResponder {
     var onCancelled: (() -> Void)?
 
     private let dictation = NoteDictationController()
+    /// The app that was frontmost when the session started, before Markup
+    /// activated. Used to break ties when a larger window (often a browser
+    /// overlay) is listed in front of the window the user was actually on.
+    private let originProcessID: pid_t?
     private var windows: [LiveSelectionWindow] = []
     private var views: [LiveSelectionView] = []
     private var hud: SessionHUDView?
@@ -57,7 +61,8 @@ final class LiveMarkupSession: NSResponder {
         !windows.isEmpty && !isEnded
     }
 
-    override init() {
+    init(originProcessID: pid_t? = nil) {
+        self.originProcessID = originProcessID
         super.init()
         configureDictation()
     }
@@ -184,7 +189,12 @@ final class LiveMarkupSession: NSResponder {
         updateHUD()
     }
 
-    func commitSelection(localRect: NSRect, in view: LiveSelectionView, releasePoint: NSPoint) {
+    func commitSelection(
+        localRect: NSRect,
+        in view: LiveSelectionView,
+        originPoint: NSPoint,
+        releasePoint: NSPoint
+    ) {
         guard draft.canAddArea else {
             NSSound.beep()
             abortNewAreaDrag()
@@ -197,8 +207,12 @@ final class LiveMarkupSession: NSResponder {
             return
         }
 
-        let owner = AreaWindowResolver.owningWindow(under: globalRect)
-            .map(AreaWindowResolver.owner(for:))
+        let probe = view.globalCGPoint(forLocal: originPoint)
+        let owner = AreaWindowResolver.owningWindow(
+            under: globalRect,
+            probe: probe,
+            preferringProcessID: originProcessID
+        ).map(AreaWindowResolver.owner(for:))
 
         let incomingNote = dictation.committedText
         let incomingVolatile = dictation.volatileText

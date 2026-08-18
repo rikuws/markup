@@ -74,6 +74,7 @@ enum BrowserPageContextResolver {
         "com.microsoft.edgemac.Canary",
         "com.brave.Browser",
         "company.thebrowser.Browser",
+        "company.thebrowser.dia",
         "com.vivaldi.Vivaldi",
         "com.operasoftware.Opera",
         "com.operasoftware.OperaGX"
