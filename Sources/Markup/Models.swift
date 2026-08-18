@@ -83,8 +83,8 @@ struct BrowserPageContext: Codable, Equatable {
 }
 
 /// The window an area was drawn on top of, resolved by hit-testing the
-/// on-screen window list at mouse-up. `nil` owner means the area sits on
-/// the desktop (or on nothing routable).
+/// on-screen window list at the drag origin (front-to-back). `nil` owner
+/// means the area sits on the desktop (or on nothing routable).
 struct AreaOwner {
     var appName: String
     var bundleId: String

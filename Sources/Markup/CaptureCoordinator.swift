@@ -41,7 +41,10 @@ final class CaptureCoordinator {
     private func startSession() {
         guard ensureCaptureAccess() else { return }
 
-        let session = LiveMarkupSession()
+        // Snapshot before Markup activates — after that the frontmost app
+        // is Markup, and geometry has to recover the window the user was on.
+        let originPID = Self.currentOriginProcessID()
+        let session = LiveMarkupSession(originProcessID: originPID)
         session.onSaveRequested = { [weak self] in
             self?.saveSession()
         }
@@ -69,6 +72,14 @@ final class CaptureCoordinator {
 
         Task { await NoteDictationController.prewarm() }
         show()
+    }
+
+    private static func currentOriginProcessID() -> pid_t? {
+        let own = ProcessInfo.processInfo.processIdentifier
+        guard let app = NSWorkspace.shared.frontmostApplication,
+              app.processIdentifier != own
+        else { return nil }
+        return app.processIdentifier
     }
 
     private func clearSession() {
