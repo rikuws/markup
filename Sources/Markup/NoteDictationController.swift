@@ -1,4 +1,5 @@
 import AVFoundation
+import Accelerate
 import AppKit
 import CoreMedia
 import Darwin
@@ -18,6 +19,7 @@ final class NoteDictationController {
     var onStateChanged: ((State) -> Void)?
     var onTranscriptChanged: ((String, String) -> Void)?
     var onSpeechDetectedChanged: ((Bool) -> Void)?
+    var onAudioLevelChanged: ((Float) -> Void)?
 
     private(set) var state: State = .idle {
         didSet {
@@ -67,6 +69,7 @@ final class NoteDictationController {
     /// True while the fallback `DictationTranscriber` is running, so session
     /// vocabulary can be pushed through `AnalysisContext`.
     private var usesDictationContext = false
+    private var levelSink: AudioLevelSink?
 
     nonisolated static var hasMicrophoneAccess: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -251,6 +254,12 @@ final class NoteDictationController {
                 bufferingPolicy: .bufferingOldest(192)
             )
 
+            let sink = AudioLevelSink()
+            sink.setHandler { [weak self] level in
+                self?.handleAudioLevel(level)
+            }
+            self.levelSink = sink
+
             inputNode.installTap(onBus: 0, bufferSize: 2_048, format: naturalFormat) { buffer, _ in
                 let converted: AVAudioPCMBuffer?
                 if let converter {
@@ -260,6 +269,7 @@ final class NoteDictationController {
                 }
 
                 guard let converted else { return }
+                sink.ingest(converted)
                 _ = inputPair.continuation.yield(AnalyzerInput(buffer: converted))
             }
 
@@ -268,6 +278,8 @@ final class NoteDictationController {
 
             guard pendingStart, sessionID == currentSession, !Task.isCancelled else {
                 inputNode.removeTap(onBus: 0)
+                sink.stop()
+                self.levelSink = nil
                 engine.stop()
                 inputPair.continuation.finish()
                 await analyzer.cancelAndFinishNow()
@@ -474,6 +486,11 @@ final class NoteDictationController {
         onTranscriptChanged?(committedText, volatileText)
     }
 
+    private func handleAudioLevel(_ level: Float) {
+        guard state == .listening else { return }
+        onAudioLevelChanged?(level)
+    }
+
     private func resetAudioClockKeepingNote() {
         lastHeardEnd = .zero
         targetStart = .zero
@@ -490,6 +507,8 @@ final class NoteDictationController {
             engine?.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
+        levelSink?.stop()
+        levelSink = nil
         engine?.stop()
         audioEngine = nil
 
@@ -723,5 +742,62 @@ private final class PCMBufferConverter {
             return nil
         }
         return output
+    }
+}
+
+/// RMS/peak from the mic tap, published on the main queue at ~50 Hz.
+private final class AudioLevelSink: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handler: ((Float) -> Void)?
+    private var lastPublish = 0.0
+
+    func setHandler(_ handler: ((Float) -> Void)?) {
+        lock.lock()
+        self.handler = handler
+        lock.unlock()
+    }
+
+    func stop() {
+        setHandler(nil)
+    }
+
+    func ingest(_ buffer: AVAudioPCMBuffer) {
+        let level = PCMAmplitude.normalized(from: buffer)
+        let now = CFAbsoluteTimeGetCurrent()
+        lock.lock()
+        let shouldPublish = now - lastPublish >= 1.0 / 50.0
+        if shouldPublish {
+            lastPublish = now
+        }
+        let handler = self.handler
+        lock.unlock()
+        guard shouldPublish, let handler else { return }
+        DispatchQueue.main.async {
+            handler(level)
+        }
+    }
+}
+
+private enum PCMAmplitude {
+    static func normalized(from buffer: AVAudioPCMBuffer) -> Float {
+        let frames = Int(buffer.frameLength)
+        guard frames > 0, let channels = buffer.floatChannelData else { return 0 }
+
+        let channelCount = Int(buffer.format.channelCount)
+        var rms: Float = 0
+        var peak: Float = 0
+        for channel in 0..<max(channelCount, 1) {
+            let pointer = channels[channel]
+            var channelRMS: Float = 0
+            var channelPeak: Float = 0
+            vDSP_rmsqv(pointer, 1, &channelRMS, vDSP_Length(frames))
+            vDSP_maxmgv(pointer, 1, &channelPeak, vDSP_Length(frames))
+            rms = max(rms, channelRMS)
+            peak = max(peak, channelPeak)
+        }
+
+        let mixed = rms * 0.62 + peak * 0.38
+        if mixed < 0.0035 { return 0 }
+        return Float(min(1, pow(Double(mixed) * 12.5, 0.52)))
     }
 }

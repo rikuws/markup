@@ -35,7 +35,7 @@ That gives coding agents the same context a human reviewer would want: what app 
 | Live on-screen markup | The default `Cmd+Shift+M` hotkey (or the menu bar item) puts Liquid Glass selection directly on the live screen — no screenshot editor, no dimmed overlay. |
 | Dev-mode friendly | Mark local development builds, localhost browser tabs, and uninstalled app windows. |
 | Multiple areas | Mark as many areas as you want, across apps and displays; each area gets its own note. |
-| Talk while you mark | Speak while you draw; dictation uses Apple’s on-device `SpeechTranscriber` (the Notes engine) and reranks technical terms such as UI, UX, and SwiftUI. Speech from the moment you start a new drag lands only in that area (click an area to retarget). |
+| Talk while you mark | Speak while you draw; dictation uses Apple’s on-device `SpeechTranscriber` (the Notes engine) and reranks technical terms such as UI, UX, and SwiftUI. A live waveform and decoding transcript show that Markup is hearing you, including while you drag (when no caption chip exists yet). Speech from the moment you start a new drag lands only in that area (click an area to retarget). |
 | Save-time capture | Pixels are captured when you save, so you can reproduce the issue live while narrating it. |
 | Per-area routing | Each area detects the app it was drawn on and routes to that app's markup folder — native apps by identity, browser pages by local host, repository, Figma file, Google Doc, or host. |
 | Feedback inbox | Review pending feedback by project, open screenshots, edit notes, reveal folders, or move handled items to Trash. |

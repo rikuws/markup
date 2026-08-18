@@ -352,13 +352,25 @@ final class LiveMarkupSession: NSResponder {
 
     private func configureDictation() {
         dictation.onStateChanged = { [weak self] _ in
+            self?.publishListenFeedback()
             self?.updateHUD()
         }
         dictation.onSpeechDetectedChanged = { [weak self] detected in
-            self?.hud?.listeningChip.speechDetected = detected
+            guard let self else { return }
+            self.hud?.listeningChip.speechDetected = detected
+            self.publishListenFeedback()
+        }
+        dictation.onAudioLevelChanged = { [weak self] level in
+            guard let self else { return }
+            self.hud?.listeningChip.pushAudioLevel(level)
+            for view in self.views {
+                view.pushAudioLevel(level)
+            }
         }
         dictation.onTranscriptChanged = { [weak self] committed, volatile in
-            guard let self, !self.isEditingActiveNote else { return }
+            guard let self else { return }
+            self.publishListenFeedback()
+            guard !self.isEditingActiveNote else { return }
             // During a new-area drag the controller already holds only this
             // target's speech; do not write it onto the previous area.
             guard !self.pendingNewArea, let area = self.draft.activeArea else { return }
@@ -369,6 +381,24 @@ final class LiveMarkupSession: NSResponder {
             if volatile.isEmpty {
                 self.refreshRecognitionContext()
             }
+        }
+    }
+
+    private func publishListenFeedback() {
+        let mode: LiveListenCapsule.Mode = {
+            switch dictation.state {
+            case .preparing: return .preparing
+            case .listening: return .listening
+            default: return .off
+            }
+        }()
+        for view in views {
+            view.updateListenFeedback(
+                committed: dictation.committedText,
+                volatile: dictation.volatileText,
+                mode: mode,
+                speechDetected: dictation.speechDetected
+            )
         }
     }
 
@@ -401,6 +431,7 @@ final class LiveMarkupSession: NSResponder {
             view.reload(areas: entries(for: view), activeID: draft.activeAreaID)
         }
         updateHUD()
+        publishListenFeedback()
     }
 
     private func refreshRecognitionContext() {
@@ -448,6 +479,7 @@ final class LiveMarkupSession: NSResponder {
         views[hostIndex].addSubview(hud)
         self.hud = hud
         updateHUD()
+        publishListenFeedback()
     }
 
     private func updateHUD() {
