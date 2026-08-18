@@ -11,7 +11,7 @@ The first cut of the whole pipeline is implemented on this branch and needs Mac 
 - Live session: `LiveMarkupSession` + `LiveSelectionWindow`/`LiveSelectionView` (one transparent window per display, drag-to-create glass areas, caption chips with editable notes, floating HUD, Esc-mute/Esc-cancel/Return-save).
 - Per-area app detection: `AreaWindowResolver` (CGWindowList hit-test, majority vote over center + corners).
 - Save-time capture: `AreaCapturer` (owner window → display-rect → area-only fallbacks; Markup's windows excluded from every display capture).
-- Dictation retargeting: `SpeechTranscriber` with audio time ranges; a new-area drag freezes the previous note and routes later speech only to the new area. Click-to-retarget works via areas and chips.
+- Dictation retargeting: `SpeechTranscriber` with audio time ranges; a new-area drag freezes the previous note and routes later speech only to the new area. Click-to-retarget works via areas and chips. Technical terms are reranked after recognition (`TechnicalTranscriptResolver`); `SpeechTranscriber` still has no contextual-strings hook.
 - Routing and output: per-area routes grouped into one bundle per route (`FeedbackBundleWriter`, metadata schema v4 with per-area notes; `instruction.md` keeps a combined "User note:" block for inbox compatibility).
 - Retired: `AnnotationWindowController`, `AnnotationCanvasView` (glass pane extracted to `SelectionGlass.swift`), `AppendCaptureHUDController`, `ActiveWindowCapturer`, `ScreenRecorder`, `RecordingProgressWindowController`. There is no Record 10s in 2.0.
 
