@@ -12,11 +12,28 @@ actor ParakeetTranscriptionEngine: TranscriptionEngine {
 
     nonisolated var kind: TranscriptionEngineKind { .parakeet }
 
+    /// True when every required TDT v3 file and vocabulary is already on disk.
+    nonisolated static func modelsAreOnDisk() -> Bool {
+        let cache = AsrModels.defaultCacheDirectory(for: .v3)
+        return AsrModels.modelsExist(at: cache, version: .v3)
+    }
+
     private var manager: AsrManager?
     private var prepareTask: Task<AsrManager, Error>?
 
     func prepare() async throws {
-        _ = try await preparedManager()
+        try await prepare(forceRedownload: false)
+    }
+
+    func prepare(forceRedownload: Bool) async throws {
+        if forceRedownload {
+            if let prepareTask {
+                _ = try? await prepareTask.value
+            }
+            manager = nil
+            self.prepareTask = nil
+        }
+        _ = try await preparedManager(forceRedownload: forceRedownload)
     }
 
     func transcribe(_ audio: CapturedAudio) async throws -> TranscriptionResult {
@@ -25,12 +42,12 @@ actor ParakeetTranscriptionEngine: TranscriptionEngine {
             return TranscriptionResult(text: "", alternatives: [], inferenceDuration: 0)
         }
 
-        let manager = try await preparedManager()
+        let manager = try await preparedManager(forceRedownload: false)
         return try await Self.runTranscription(on: manager, samples: samples)
     }
 
-    private func preparedManager() async throws -> AsrManager {
-        if let manager, await manager.isAvailable {
+    private func preparedManager(forceRedownload: Bool) async throws -> AsrManager {
+        if !forceRedownload, let manager, await manager.isAvailable {
             return manager
         }
         if let prepareTask {
@@ -40,7 +57,7 @@ actor ParakeetTranscriptionEngine: TranscriptionEngine {
         }
 
         let task = Task<AsrManager, Error> {
-            try await Self.loadManager()
+            try await Self.loadManager(forceRedownload: forceRedownload)
         }
         prepareTask = task
         do {
@@ -54,9 +71,10 @@ actor ParakeetTranscriptionEngine: TranscriptionEngine {
         }
     }
 
-    private static func loadManager() async throws -> AsrManager {
+    private static func loadManager(forceRedownload: Bool) async throws -> AsrManager {
         let cache = AsrModels.defaultCacheDirectory(for: .v3)
-        if AsrModels.modelsExist(at: cache, version: .v3) {
+        let cached = !forceRedownload && AsrModels.modelsExist(at: cache, version: .v3)
+        if cached {
             DictationLatencyLog.stage("Parakeet loading cached TDT 0.6B v3 from \(cache.path)")
         } else {
             DictationLatencyLog.stage(
@@ -64,9 +82,29 @@ actor ParakeetTranscriptionEngine: TranscriptionEngine {
             )
         }
         let loadStarted = CFAbsoluteTimeGetCurrent()
+        let progress: ProgressHandler = { snapshot in
+            Task { @MainActor in
+                ParakeetModelStatus.shared.handleDownloadProgress(snapshot)
+            }
+        }
         let models: AsrModels
         do {
-            models = try await AsrModels.downloadAndLoad(version: .v3)
+            if forceRedownload {
+                _ = try await AsrModels.download(
+                    force: true,
+                    version: .v3,
+                    progressHandler: progress
+                )
+                models = try await AsrModels.loadFromCache(
+                    version: .v3,
+                    progressHandler: progress
+                )
+            } else {
+                models = try await AsrModels.downloadAndLoad(
+                    version: .v3,
+                    progressHandler: progress
+                )
+            }
         } catch {
             DictationLatencyLog.stage("Parakeet model prepare failed: \(error.localizedDescription)")
             throw error
@@ -110,7 +148,7 @@ actor ParakeetTranscriptionEngine: TranscriptionEngine {
                     : CFAbsoluteTimeGetCurrent() - inferenceStarted
             )
         } catch ASRError.invalidAudioData {
-            DictationLatencyLog.stage("Parakeet skipped short/empty audio")
+            DictationLatencyLog.stage("Parakeet skipped short/empty audio samples=\(samples.count)")
             return TranscriptionResult(text: "", alternatives: [], inferenceDuration: 0)
         }
     }

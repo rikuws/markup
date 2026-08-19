@@ -45,6 +45,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsStore.onHotKeyChange = { [weak hotKeys] in
             hotKeys?.restart()
         }
+
+        Task { @MainActor in
+            if settingsStore.settings.dictationEngine == .parakeet {
+                ParakeetModelStatus.shared.ensureDownloaded()
+            } else {
+                ParakeetModelStatus.shared.refreshFromDisk()
+            }
+        }
     }
 
     private func showSettings() {

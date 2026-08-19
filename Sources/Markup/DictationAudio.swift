@@ -136,11 +136,13 @@ final class PCMBufferConverter {
 final class PCMSampleAccumulator: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [Float] = []
-    private let converter: PCMBufferConverter?
-    private let outputSampleRate: Double
+    private let inputFormat: AVAudioFormat
+    private let outputFormat: AVAudioFormat
+    private var converter: PCMBufferConverter?
 
     init?(from inputFormat: AVAudioFormat, outputFormat: AVAudioFormat) {
-        outputSampleRate = outputFormat.sampleRate
+        self.inputFormat = inputFormat
+        self.outputFormat = outputFormat
         if DictationAudioFormat.formatsMatch(inputFormat, outputFormat) {
             converter = nil
         } else if let prepared = PCMBufferConverter(from: inputFormat, to: outputFormat) {
@@ -167,15 +169,22 @@ final class PCMSampleAccumulator: @unchecked Sendable {
     func take() -> CapturedAudio {
         lock.lock()
         defer { lock.unlock() }
-        if let converter {
-            for leftover in converter.drain() {
-                samples.append(contentsOf: DictationAudioFormat.floatSamples(from: leftover))
+        if converter != nil {
+            // `AVAudioConverter` cannot convert after `.endOfStream`. Recreate
+            // it so later areas keep receiving resampled mic audio.
+            if let converter {
+                for leftover in converter.drain() {
+                    samples.append(contentsOf: DictationAudioFormat.floatSamples(from: leftover))
+                }
+            }
+            if let refreshed = PCMBufferConverter(from: inputFormat, to: outputFormat) {
+                converter = refreshed
             }
         }
         let taken = samples
         samples = []
         samples.reserveCapacity(taken.capacity)
-        return CapturedAudio(samples: taken, sampleRate: outputSampleRate)
+        return CapturedAudio(samples: taken, sampleRate: outputFormat.sampleRate)
     }
 }
 

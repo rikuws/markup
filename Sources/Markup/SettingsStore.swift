@@ -90,8 +90,12 @@ final class SettingsStore: ObservableObject {
         next.dictationEngine = engine
         settings = next
         save()
-        Task {
-            await NoteDictationController.prewarm(engine: engine)
+        Task { @MainActor in
+            if engine == .parakeet {
+                ParakeetModelStatus.shared.ensureDownloaded()
+            } else {
+                await NoteDictationController.prewarm(engine: engine)
+            }
         }
     }
 
