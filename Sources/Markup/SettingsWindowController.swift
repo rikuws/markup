@@ -26,11 +26,13 @@ final class SettingsWindowController: NSWindowController {
 struct SettingsView: View {
     @ObservedObject var settingsStore: SettingsStore
     @ObservedObject var appUpdater: AppUpdater
+    @ObservedObject private var parakeetStatus = ParakeetModelStatus.shared
     @State private var hotKey: HotKeySettings
 
     init(settingsStore: SettingsStore, appUpdater: AppUpdater) {
         self.settingsStore = settingsStore
         self.appUpdater = appUpdater
+        _parakeetStatus = ObservedObject(wrappedValue: ParakeetModelStatus.shared)
         _hotKey = State(initialValue: settingsStore.settings.hotKey)
     }
 
@@ -56,6 +58,12 @@ struct SettingsView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         .onReceive(settingsStore.$settings) { settings in
             hotKey = settings.hotKey
+        }
+        .onAppear {
+            parakeetStatus.refreshFromDisk()
+            if settingsStore.settings.dictationEngine == .parakeet {
+                parakeetStatus.ensureDownloaded()
+            }
         }
     }
 
@@ -221,7 +229,12 @@ struct SettingsView: View {
                 Picker(
                     selection: Binding(
                         get: { settingsStore.settings.dictationEngine },
-                        set: { settingsStore.updateDictationEngine($0) }
+                        set: { engine in
+                            settingsStore.updateDictationEngine(engine)
+                            if engine == .parakeet {
+                                parakeetStatus.ensureDownloaded()
+                            }
+                        }
                     )
                 ) {
                     ForEach(TranscriptionEngineKind.allCases, id: \.self) { engine in
@@ -233,11 +246,101 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
 
-                Text("Parakeet downloads the multilingual TDT 0.6B v3 CoreML model on first use into Application Support. Console logs compare stop-to-text latency as [Dictation].")
+                parakeetStatusRow
+
+                Text("Parakeet transcribes locally after you mute or start a new area. Latency lines are tagged [Dictation] in Console.app (filter the Markup process).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    private var parakeetStatusRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                parakeetStatusAccessory
+                Text(parakeetStatusText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+
+            if let retryTitle = parakeetRetryTitle {
+                Button(retryTitle) {
+                    parakeetRetry()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+
+    @ViewBuilder
+    private var parakeetStatusAccessory: some View {
+        switch parakeetStatus.phase {
+        case .checking, .compiling:
+            ProgressView()
+                .controlSize(.small)
+        case .notDownloaded:
+            Image(systemName: "arrow.down.circle")
+                .foregroundStyle(.secondary)
+        case .downloading(let fraction, _):
+            if fraction > 0 {
+                ProgressView(value: min(max(fraction, 0), 1))
+                    .progressViewStyle(.linear)
+                    .frame(width: 72)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        case .ready:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .damaged:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.red)
+        }
+    }
+
+    private var parakeetStatusText: String {
+        switch parakeetStatus.phase {
+        case .checking:
+            return "Checking Parakeet…"
+        case .notDownloaded:
+            return "Parakeet is not downloaded yet. Choose Parakeet to download it now."
+        case .downloading(_, let detail), .compiling(let detail):
+            return detail
+        case .ready:
+            return "Parakeet is downloaded and intact"
+        case .damaged(let message), .failed(let message):
+            return message
+        }
+    }
+
+    private var parakeetRetryTitle: String? {
+        switch parakeetStatus.phase {
+        case .damaged:
+            return "Download again"
+        case .failed:
+            return "Try Again"
+        default:
+            return nil
+        }
+    }
+
+    private func parakeetRetry() {
+        switch parakeetStatus.phase {
+        case .damaged:
+            parakeetStatus.redownload()
+        case .failed:
+            parakeetStatus.ensureDownloaded()
+        default:
+            break
         }
     }
 

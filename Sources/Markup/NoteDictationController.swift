@@ -50,7 +50,7 @@ final class NoteDictationController {
     private var tapInstalled = false
     private var converter: PCMBufferConverter?
     private var sampleAccumulator: PCMSampleAccumulator?
-    private var heldAudio: CapturedAudio?
+    private var heldSlices: [CapturedAudio] = []
     private var analysisTask: Task<Void, Never>?
     private var resultTask: Task<Void, Never>?
     private var detectionTask: Task<Void, Never>?
@@ -150,8 +150,17 @@ final class NoteDictationController {
     /// after clicking an existing area).
     func beginNewTarget(adopting note: String = "", captureHeldAudio: Bool = true) {
         if usesBatchTranscription, captureHeldAudio {
-            heldAudio = sampleAccumulator?.take()
+            let audio = sampleAccumulator?.take() ?? CapturedAudio(
+                samples: [],
+                sampleRate: DictationAudioFormat.parakeetSampleRate
+            )
             stopRequestedAt = CFAbsoluteTimeGetCurrent()
+            DictationLatencyLog.stage(
+                "retarget captured \(String(format: "%.2f", audio.duration))s samples=\(audio.samples.count)"
+            )
+            if !audio.isEmpty {
+                heldSlices.append(audio)
+            }
         }
         clipPrefix = String(targetVolatile.characters)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -168,7 +177,6 @@ final class NoteDictationController {
     /// Used when a new-area drag is abandoned so speech during the drag
     /// still belongs to the previous area.
     func resumeTarget(adopting note: String) {
-        heldAudio = nil
         baseNote = note
         targetStart = lastHeardEnd
         targetFinalized = AttributedString()
@@ -180,9 +188,8 @@ final class NoteDictationController {
     }
 
     func takeHeldAudio() -> CapturedAudio? {
-        let audio = heldAudio
-        heldAudio = nil
-        return audio
+        guard !heldSlices.isEmpty else { return nil }
+        return heldSlices.removeFirst()
     }
 
     /// Transcribes the current (or held) capture for batch engines, or
@@ -281,7 +288,7 @@ final class NoteDictationController {
         resetAudioClockKeepingNote()
         recordingStartedAt = CFAbsoluteTimeGetCurrent()
         stopRequestedAt = nil
-        heldAudio = nil
+        heldSlices = []
 
         do {
             if usesBatchTranscription {
@@ -653,24 +660,20 @@ final class NoteDictationController {
     private func runBatchTranscription(_ audio: CapturedAudio) async -> String {
         DictationLatencyLog.stage("audio ready duration=\(String(format: "%.2f", audio.duration))s samples=\(audio.samples.count)")
         guard !audio.isEmpty else {
-            DictationLatencyLog.stage("empty transcription")
+            DictationLatencyLog.stage("empty transcription (no captured samples)")
             return ""
         }
 
-        let previousState = state
-        if state == .listening {
-            state = .transcribing
-        }
         DictationLatencyLog.stage("inference started")
         do {
             let result = try await transcriptionEngine.transcribe(audio)
-            DictationLatencyLog.stage("transcription available")
+            DictationLatencyLog.stage("transcription available chars=\(result.text.count)")
             let spoken = resolver.resolvedSpeech(result.text)
             if spoken != result.text {
                 NSLog("Markup: dictation rewrite “\(result.text)” → “\(spoken)”")
             }
             if spoken.isEmpty {
-                DictationLatencyLog.stage("empty transcription")
+                DictationLatencyLog.stage("empty transcription (model returned no text)")
             }
             let stopToText: TimeInterval
             if let stopRequestedAt {
@@ -685,15 +688,9 @@ final class NoteDictationController {
                 stopToText: stopToText
             )
             DictationLatencyLog.stage("text inserted")
-            if state == .transcribing, previousState == .listening {
-                state = .listening
-            }
             return spoken
         } catch {
             NSLog("Markup: %@ transcription failed: %@", engineKind.logName, error.localizedDescription)
-            if state == .transcribing, previousState == .listening {
-                state = .listening
-            }
             return ""
         }
     }
