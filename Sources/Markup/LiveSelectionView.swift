@@ -936,6 +936,7 @@ final class ListeningChipButton: NSControl {
     enum Mode {
         case hidden
         case preparing
+        case transcribing
         case listening
         case muted
         case unavailable
@@ -1038,7 +1039,7 @@ final class ListeningChipButton: NSControl {
 
     private func applyMode() {
         isHidden = mode == .hidden
-        isEnabled = mode != .preparing
+        isEnabled = mode != .preparing && mode != .transcribing
         meter.reset()
         meter.isHidden = mode != .listening
 
@@ -1054,6 +1055,12 @@ final class ListeningChipButton: NSControl {
             iconView.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
             toolTip = "Preparing on-device dictation"
             setAccessibilityLabel("Preparing")
+            layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
+        case .transcribing:
+            titleLabel.stringValue = "Transcribing"
+            iconView.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)
+            toolTip = "Finishing on-device transcription"
+            setAccessibilityLabel("Transcribing")
             layer?.backgroundColor = NSColor.white.withAlphaComponent(0.12).cgColor
         case .listening:
             titleLabel.stringValue = "Listening"

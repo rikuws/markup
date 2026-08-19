@@ -1,8 +1,6 @@
 import AVFoundation
-import Accelerate
 import AppKit
 import CoreMedia
-import Darwin
 import Foundation
 import Speech
 
@@ -12,6 +10,7 @@ final class NoteDictationController {
         case idle
         case preparing
         case listening
+        case transcribing
         case muted
         case unavailable
     }
@@ -38,6 +37,10 @@ final class NoteDictationController {
     }
 
     var isListening: Bool { state == .listening }
+    var usesBatchTranscription: Bool { !engineKind.reportsPartialResults }
+
+    private let engineKind: TranscriptionEngineKind
+    private let transcriptionEngine: any TranscriptionEngine
 
     private var audioEngine: AVAudioEngine?
     private var analyzer: SpeechAnalyzer?
@@ -46,12 +49,17 @@ final class NoteDictationController {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var tapInstalled = false
     private var converter: PCMBufferConverter?
+    private var sampleAccumulator: PCMSampleAccumulator?
+    private var heldAudio: CapturedAudio?
     private var analysisTask: Task<Void, Never>?
     private var resultTask: Task<Void, Never>?
     private var detectionTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
+    private var transcribeTask: Task<Void, Never>?
     private var sessionID = UUID()
     private var pendingStart = false
+    private var recordingStartedAt: CFAbsoluteTime?
+    private var stopRequestedAt: CFAbsoluteTime?
 
     /// Note text that already belongs to the current target (typed or
     /// adopted from an existing area). New speech is appended to this.
@@ -84,11 +92,16 @@ final class NoteDictationController {
         _ = await AVCaptureDevice.requestAccess(for: .audio)
     }
 
-    static func prewarm() async {
+    init(engineKind: TranscriptionEngineKind = .appleSpeech) {
+        self.engineKind = engineKind
+        self.transcriptionEngine = TranscriptionEngines.make(engineKind)
+    }
+
+    static func prewarm(engine kind: TranscriptionEngineKind) async {
         do {
-            _ = try await makeEngine()
+            try await TranscriptionEngines.make(kind).prepare()
         } catch {
-            NSLog("Markup: dictation prewarm failed: \(error.localizedDescription)")
+            NSLog("Markup: dictation prewarm failed (%@): %@", kind.logName, error.localizedDescription)
         }
     }
 
@@ -130,7 +143,16 @@ final class NoteDictationController {
     /// Retargets the transcript stream to a new note without stopping the
     /// analyzer. Later results are kept only if their audio starts after
     /// this moment, so a new area never inherits earlier speech.
-    func beginNewTarget(adopting note: String = "") {
+    ///
+    /// For batch engines, call `takeHeldAudio()` after this to transcribe
+    /// speech that belonged to the previous target. Pass `captureHeldAudio:
+    /// false` when the current buffer already belongs to `note` (for example
+    /// after clicking an existing area).
+    func beginNewTarget(adopting note: String = "", captureHeldAudio: Bool = true) {
+        if usesBatchTranscription, captureHeldAudio {
+            heldAudio = sampleAccumulator?.take()
+            stopRequestedAt = CFAbsoluteTimeGetCurrent()
+        }
         clipPrefix = String(targetVolatile.characters)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         baseNote = note
@@ -140,6 +162,45 @@ final class NoteDictationController {
         committedText = note
         volatileText = ""
         publishTranscript()
+    }
+
+    /// Keep the current capture buffer and point committed text at `note`.
+    /// Used when a new-area drag is abandoned so speech during the drag
+    /// still belongs to the previous area.
+    func resumeTarget(adopting note: String) {
+        heldAudio = nil
+        baseNote = note
+        targetStart = lastHeardEnd
+        targetFinalized = AttributedString()
+        targetVolatile = AttributedString()
+        clipPrefix = ""
+        committedText = note
+        volatileText = ""
+        publishTranscript()
+    }
+
+    func takeHeldAudio() -> CapturedAudio? {
+        let audio = heldAudio
+        heldAudio = nil
+        return audio
+    }
+
+    /// Transcribes the current (or held) capture for batch engines, or
+    /// commits volatile Apple text. Safe to call on the Apple path.
+    func finalizeCurrentUtterance() async {
+        if usesBatchTranscription {
+            let audio = sampleAccumulator?.take() ?? CapturedAudio(samples: [], sampleRate: DictationAudioFormat.parakeetSampleRate)
+            let spoken = await runBatchTranscription(audio)
+            applySpokenText(spoken)
+            return
+        }
+        commitVolatile()
+    }
+
+    /// Transcribe audio that `beginNewTarget()` sliced off for the previous area.
+    func transcribeHeldAudio() async -> String {
+        guard let audio = takeHeldAudio() else { return "" }
+        return await runBatchTranscription(audio)
     }
 
     func startListening() {
@@ -154,6 +215,23 @@ final class NoteDictationController {
         pendingStart = false
         startTask?.cancel()
         startTask = nil
+        stopRequestedAt = CFAbsoluteTimeGetCurrent()
+        DictationLatencyLog.stage("dictation stopped engine=\(engineKind.logName)")
+        if usesBatchTranscription, state == .listening || state == .preparing {
+            state = .transcribing
+            stopCaptureKeepingAccumulator()
+            transcribeTask?.cancel()
+            transcribeTask = Task { [weak self] in
+                guard let self else { return }
+                await self.finalizeCurrentUtterance()
+                guard !Task.isCancelled else { return }
+                self.teardownSession(finalize: false)
+                if self.state != .unavailable {
+                    self.state = .muted
+                }
+            }
+            return
+        }
         commitVolatile()
         teardownSession(finalize: true)
         if state != .unavailable {
@@ -167,7 +245,7 @@ final class NoteDictationController {
             startListening()
         case .listening, .preparing:
             mute()
-        case .unavailable:
+        case .transcribing, .unavailable:
             break
         }
     }
@@ -176,6 +254,9 @@ final class NoteDictationController {
         pendingStart = false
         startTask?.cancel()
         startTask = nil
+        transcribeTask?.cancel()
+        transcribeTask = nil
+        stopRequestedAt = CFAbsoluteTimeGetCurrent()
         commitVolatile()
         teardownSession(finalize: false)
         if state != .unavailable {
@@ -198,173 +279,240 @@ final class NoteDictationController {
         let currentSession = UUID()
         sessionID = currentSession
         resetAudioClockKeepingNote()
+        recordingStartedAt = CFAbsoluteTimeGetCurrent()
+        stopRequestedAt = nil
+        heldAudio = nil
 
         do {
-            let prepared = try await Self.makeEngine()
-            guard pendingStart, sessionID == currentSession, !Task.isCancelled else { return }
-
-            let transcriberModule: any SpeechModule
-            switch prepared {
-            case .speech(let transcriber):
-                transcriberModule = transcriber
-            case .dictation(let transcriber):
-                transcriberModule = transcriber
-            }
-
-            let detector = SpeechDetector(
-                detectionOptions: .init(sensitivityLevel: .medium),
-                reportResults: true
-            )
-            let modules: [any SpeechModule] = [transcriberModule, detector]
-            let engine = AVAudioEngine()
-            let inputNode = engine.inputNode
-            let naturalFormat = inputNode.outputFormat(forBus: 0)
-            guard naturalFormat.sampleRate > 0, naturalFormat.channelCount > 0 else {
-                throw MarkupError("No microphone input format is available.")
-            }
-
-            guard let analysisFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
-                compatibleWith: modules,
-                considering: naturalFormat
-            ) else {
-                throw MarkupError("Speech analysis is not available on this Mac.")
-            }
-
-            let converter: PCMBufferConverter?
-            if Self.formatsMatch(naturalFormat, analysisFormat) {
-                converter = nil
-            } else if let preparedConverter = PCMBufferConverter(from: naturalFormat, to: analysisFormat) {
-                converter = preparedConverter
+            if usesBatchTranscription {
+                try await beginParakeetSession(session: currentSession)
             } else {
-                throw MarkupError("Could not convert microphone audio for dictation.")
-            }
-
-            let analyzer = SpeechAnalyzer(
-                modules: modules,
-                options: .init(priority: .userInitiated, modelRetention: .lingering)
-            )
-            try await analyzer.prepareToAnalyze(in: analysisFormat)
-            guard pendingStart, sessionID == currentSession, !Task.isCancelled else {
-                await analyzer.cancelAndFinishNow()
-                return
-            }
-
-            let inputPair = AsyncStream.makeStream(
-                of: AnalyzerInput.self,
-                bufferingPolicy: .bufferingOldest(192)
-            )
-
-            let sink = AudioLevelSink()
-            sink.setHandler { [weak self] level in
-                self?.handleAudioLevel(level)
-            }
-            self.levelSink = sink
-
-            inputNode.installTap(onBus: 0, bufferSize: 2_048, format: naturalFormat) { buffer, _ in
-                let converted: AVAudioPCMBuffer?
-                if let converter {
-                    converted = converter.convert(buffer)
-                } else {
-                    converted = Self.copyPCMBuffer(buffer)
-                }
-
-                guard let converted else { return }
-                sink.ingest(converted)
-                _ = inputPair.continuation.yield(AnalyzerInput(buffer: converted))
-            }
-
-            engine.prepare()
-            try engine.start()
-
-            guard pendingStart, sessionID == currentSession, !Task.isCancelled else {
-                inputNode.removeTap(onBus: 0)
-                sink.stop()
-                self.levelSink = nil
-                engine.stop()
-                inputPair.continuation.finish()
-                await analyzer.cancelAndFinishNow()
-                return
-            }
-
-            audioEngine = engine
-            self.analyzer = analyzer
-            preparedTranscriber = prepared
-            speechDetector = detector
-            inputContinuation = inputPair.continuation
-            tapInstalled = true
-            self.converter = converter
-            speechDetected = false
-            usesDictationContext = {
-                if case .dictation = prepared { return true }
-                return false
-            }()
-            state = .listening
-            await pushDictationContext()
-            guard pendingStart, sessionID == currentSession, !Task.isCancelled else { return }
-
-            analysisTask = Task {
-                do {
-                    try await analyzer.start(inputSequence: inputPair.stream)
-                } catch is CancellationError {
-                    return
-                } catch {
-                    await MainActor.run {
-                        self.fail(error)
-                    }
-                }
-            }
-
-            resultTask = Task {
-                do {
-                    switch prepared {
-                    case .speech(let transcriber):
-                        for try await result in transcriber.results {
-                            await MainActor.run {
-                                self.ingest(
-                                    range: result.range,
-                                    primary: result.text,
-                                    alternatives: result.alternatives,
-                                    isFinal: result.isFinal,
-                                    session: currentSession
-                                )
-                            }
-                        }
-                    case .dictation(let transcriber):
-                        for try await result in transcriber.results {
-                            await MainActor.run {
-                                self.ingest(
-                                    range: result.range,
-                                    primary: result.text,
-                                    alternatives: result.alternatives,
-                                    isFinal: result.isFinal,
-                                    session: currentSession
-                                )
-                            }
-                        }
-                    }
-                } catch is CancellationError {
-                    return
-                } catch {
-                    await MainActor.run {
-                        self.fail(error)
-                    }
-                }
-            }
-
-            detectionTask = Task {
-                do {
-                    for try await result in detector.results {
-                        await MainActor.run {
-                            guard self.sessionID == currentSession else { return }
-                            self.speechDetected = result.speechDetected
-                        }
-                    }
-                } catch {
-                    return
-                }
+                try await beginAppleSession(session: currentSession)
             }
         } catch {
             fail(error)
+        }
+    }
+
+    private func beginParakeetSession(session currentSession: UUID) async throws {
+        DictationLatencyLog.stage("Parakeet session prepare")
+        try await transcriptionEngine.prepare()
+        guard pendingStart, sessionID == currentSession, !Task.isCancelled else { return }
+
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let naturalFormat = inputNode.outputFormat(forBus: 0)
+        guard naturalFormat.sampleRate > 0, naturalFormat.channelCount > 0 else {
+            throw MarkupError("No microphone input format is available.")
+        }
+        guard let parakeetFormat = DictationAudioFormat.parakeetFormat() else {
+            throw MarkupError("Could not create a 16 kHz mono capture format.")
+        }
+        guard let accumulator = PCMSampleAccumulator(from: naturalFormat, outputFormat: parakeetFormat) else {
+            throw MarkupError("Could not convert microphone audio for Parakeet.")
+        }
+
+        let sink = AudioLevelSink()
+        sink.setHandler { [weak self] level in
+            self?.handleAudioLevel(level)
+        }
+        self.levelSink = sink
+
+        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: naturalFormat) { buffer, _ in
+            sink.ingest(buffer)
+            accumulator.append(buffer)
+        }
+
+        engine.prepare()
+        do {
+            try engine.start()
+        } catch {
+            inputNode.removeTap(onBus: 0)
+            sink.stop()
+            self.levelSink = nil
+            throw error
+        }
+
+        guard pendingStart, sessionID == currentSession, !Task.isCancelled else {
+            inputNode.removeTap(onBus: 0)
+            sink.stop()
+            self.levelSink = nil
+            engine.stop()
+            return
+        }
+
+        audioEngine = engine
+        sampleAccumulator = accumulator
+        tapInstalled = true
+        speechDetected = false
+        usesDictationContext = false
+        state = .listening
+        NSLog("Markup: dictation engine Parakeet TDT 0.6B v3")
+    }
+
+    private func beginAppleSession(session currentSession: UUID) async throws {
+        let prepared = try await AppleSpeechTranscriptionEngine.makePreparedTranscriber()
+        guard pendingStart, sessionID == currentSession, !Task.isCancelled else { return }
+
+        let transcriberModule: any SpeechModule
+        switch prepared {
+        case .speech(let transcriber):
+            transcriberModule = transcriber
+        case .dictation(let transcriber):
+            transcriberModule = transcriber
+        }
+
+        let detector = SpeechDetector(
+            detectionOptions: .init(sensitivityLevel: .medium),
+            reportResults: true
+        )
+        let modules: [any SpeechModule] = [transcriberModule, detector]
+        let engine = AVAudioEngine()
+        let inputNode = engine.inputNode
+        let naturalFormat = inputNode.outputFormat(forBus: 0)
+        guard naturalFormat.sampleRate > 0, naturalFormat.channelCount > 0 else {
+            throw MarkupError("No microphone input format is available.")
+        }
+
+        guard let analysisFormat = await SpeechAnalyzer.bestAvailableAudioFormat(
+            compatibleWith: modules,
+            considering: naturalFormat
+        ) else {
+            throw MarkupError("Speech analysis is not available on this Mac.")
+        }
+
+        let converter: PCMBufferConverter?
+        if DictationAudioFormat.formatsMatch(naturalFormat, analysisFormat) {
+            converter = nil
+        } else if let preparedConverter = PCMBufferConverter(from: naturalFormat, to: analysisFormat) {
+            converter = preparedConverter
+        } else {
+            throw MarkupError("Could not convert microphone audio for dictation.")
+        }
+
+        let analyzer = SpeechAnalyzer(
+            modules: modules,
+            options: .init(priority: .userInitiated, modelRetention: .lingering)
+        )
+        try await analyzer.prepareToAnalyze(in: analysisFormat)
+        guard pendingStart, sessionID == currentSession, !Task.isCancelled else {
+            await analyzer.cancelAndFinishNow()
+            return
+        }
+
+        let inputPair = AsyncStream.makeStream(
+            of: AnalyzerInput.self,
+            bufferingPolicy: .bufferingOldest(192)
+        )
+
+        let sink = AudioLevelSink()
+        sink.setHandler { [weak self] level in
+            self?.handleAudioLevel(level)
+        }
+        self.levelSink = sink
+
+        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: naturalFormat) { buffer, _ in
+            let converted: AVAudioPCMBuffer?
+            if let converter {
+                converted = converter.convert(buffer)
+            } else {
+                converted = DictationAudioFormat.copyPCMBuffer(buffer)
+            }
+
+            guard let converted else { return }
+            sink.ingest(converted)
+            _ = inputPair.continuation.yield(AnalyzerInput(buffer: converted))
+        }
+
+        engine.prepare()
+        try engine.start()
+
+        guard pendingStart, sessionID == currentSession, !Task.isCancelled else {
+            inputNode.removeTap(onBus: 0)
+            sink.stop()
+            self.levelSink = nil
+            engine.stop()
+            inputPair.continuation.finish()
+            await analyzer.cancelAndFinishNow()
+            return
+        }
+
+        audioEngine = engine
+        self.analyzer = analyzer
+        preparedTranscriber = prepared
+        speechDetector = detector
+        inputContinuation = inputPair.continuation
+        tapInstalled = true
+        self.converter = converter
+        speechDetected = false
+        usesDictationContext = {
+            if case .dictation = prepared { return true }
+            return false
+        }()
+        state = .listening
+        await pushDictationContext()
+        guard pendingStart, sessionID == currentSession, !Task.isCancelled else { return }
+
+        analysisTask = Task {
+            do {
+                try await analyzer.start(inputSequence: inputPair.stream)
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run {
+                    self.fail(error)
+                }
+            }
+        }
+
+        resultTask = Task {
+            do {
+                switch prepared {
+                case .speech(let transcriber):
+                    for try await result in transcriber.results {
+                        await MainActor.run {
+                            self.ingest(
+                                range: result.range,
+                                primary: result.text,
+                                alternatives: result.alternatives,
+                                isFinal: result.isFinal,
+                                session: currentSession
+                            )
+                        }
+                    }
+                case .dictation(let transcriber):
+                    for try await result in transcriber.results {
+                        await MainActor.run {
+                            self.ingest(
+                                range: result.range,
+                                primary: result.text,
+                                alternatives: result.alternatives,
+                                isFinal: result.isFinal,
+                                session: currentSession
+                            )
+                        }
+                    }
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                await MainActor.run {
+                    self.fail(error)
+                }
+            }
+        }
+
+        detectionTask = Task {
+            do {
+                for try await result in detector.results {
+                    await MainActor.run {
+                        guard self.sessionID == currentSession else { return }
+                        self.speechDetected = result.speechDetected
+                    }
+                }
+            } catch {
+                return
+            }
         }
     }
 
@@ -480,6 +628,81 @@ final class NoteDictationController {
         targetVolatile = AttributedString()
         clipPrefix = ""
         publishTranscript()
+        logAppleStopToTextIfNeeded()
+    }
+
+    private func logAppleStopToTextIfNeeded() {
+        guard !usesBatchTranscription, let stopRequestedAt else { return }
+        let audioDuration: TimeInterval
+        if let recordingStartedAt {
+            audioDuration = stopRequestedAt - recordingStartedAt
+        } else {
+            audioDuration = 0
+        }
+        DictationLatencyLog.summary(
+            engine: engineKind,
+            audioDuration: audioDuration,
+            inference: 0,
+            stopToText: CFAbsoluteTimeGetCurrent() - stopRequestedAt
+        )
+        DictationLatencyLog.stage("text inserted")
+        self.stopRequestedAt = nil
+    }
+
+    /// audio → ASR → TechnicalTranscriptResolver → insertion
+    private func runBatchTranscription(_ audio: CapturedAudio) async -> String {
+        DictationLatencyLog.stage("audio ready duration=\(String(format: "%.2f", audio.duration))s samples=\(audio.samples.count)")
+        guard !audio.isEmpty else {
+            DictationLatencyLog.stage("empty transcription")
+            return ""
+        }
+
+        let previousState = state
+        if state == .listening {
+            state = .transcribing
+        }
+        DictationLatencyLog.stage("inference started")
+        do {
+            let result = try await transcriptionEngine.transcribe(audio)
+            DictationLatencyLog.stage("transcription available")
+            let spoken = resolver.resolvedSpeech(result.text)
+            if spoken != result.text {
+                NSLog("Markup: dictation rewrite “\(result.text)” → “\(spoken)”")
+            }
+            if spoken.isEmpty {
+                DictationLatencyLog.stage("empty transcription")
+            }
+            let stopToText: TimeInterval
+            if let stopRequestedAt {
+                stopToText = CFAbsoluteTimeGetCurrent() - stopRequestedAt
+            } else {
+                stopToText = result.inferenceDuration
+            }
+            DictationLatencyLog.summary(
+                engine: engineKind,
+                audioDuration: audio.duration,
+                inference: result.inferenceDuration,
+                stopToText: stopToText
+            )
+            DictationLatencyLog.stage("text inserted")
+            if state == .transcribing, previousState == .listening {
+                state = .listening
+            }
+            return spoken
+        } catch {
+            NSLog("Markup: %@ transcription failed: %@", engineKind.logName, error.localizedDescription)
+            if state == .transcribing, previousState == .listening {
+                state = .listening
+            }
+            return ""
+        }
+    }
+
+    private func applySpokenText(_ spoken: String) {
+        committedText = Self.join(baseNote, spoken)
+        volatileText = ""
+        baseNote = committedText
+        publishTranscript()
     }
 
     private func publishTranscript() {
@@ -488,6 +711,9 @@ final class NoteDictationController {
 
     private func handleAudioLevel(_ level: Float) {
         guard state == .listening else { return }
+        if usesBatchTranscription {
+            speechDetected = level > 0.04
+        }
         onAudioLevelChanged?(level)
     }
 
@@ -501,7 +727,9 @@ final class NoteDictationController {
         volatileText = ""
     }
 
-    private func teardownSession(finalize: Bool) {
+    /// Stop the mic tap without draining the sample accumulator, so mute can
+    /// freeze audio then transcribe off the main actor.
+    private func stopCaptureKeepingAccumulator() {
         let engine = audioEngine
         if tapInstalled {
             engine?.inputNode.removeTap(onBus: 0)
@@ -511,6 +739,10 @@ final class NoteDictationController {
         levelSink = nil
         engine?.stop()
         audioEngine = nil
+    }
+
+    private func teardownSession(finalize: Bool) {
+        stopCaptureKeepingAccumulator()
 
         if let converter {
             for tail in converter.drain() {
@@ -518,6 +750,7 @@ final class NoteDictationController {
             }
         }
         converter = nil
+        sampleAccumulator = nil
         inputContinuation?.finish()
         inputContinuation = nil
 
@@ -544,58 +777,6 @@ final class NoteDictationController {
             } else {
                 await analyzerToFinish.cancelAndFinishNow()
             }
-        }
-    }
-
-    private static func makeEngine() async throws -> PreparedTranscriber {
-        if SpeechTranscriber.isAvailable,
-           let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) {
-            let preset = SpeechTranscriber.Preset.timeIndexedProgressiveTranscription
-            let transcriber = SpeechTranscriber(
-                locale: locale,
-                transcriptionOptions: preset.transcriptionOptions,
-                reportingOptions: preset.reportingOptions
-                    .subtracting([.fastResults])
-                    .union([.alternativeTranscriptions]),
-                attributeOptions: preset.attributeOptions.union([.transcriptionConfidence])
-            )
-            try await ensureAssets(for: [transcriber], locale: locale)
-            NSLog("Markup: dictation engine SpeechTranscriber (\(locale.identifier))")
-            return .speech(transcriber)
-        }
-
-        guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: .current) else {
-            throw MarkupError("Dictation is not available for the current language.")
-        }
-        let preset = DictationTranscriber.Preset.progressiveLongDictation
-        let transcriber = DictationTranscriber(
-            locale: locale,
-            contentHints: preset.contentHints,
-            transcriptionOptions: preset.transcriptionOptions,
-            reportingOptions: preset.reportingOptions.union([.alternativeTranscriptions]),
-            attributeOptions: preset.attributeOptions.union([
-                .audioTimeRange,
-                .transcriptionConfidence
-            ])
-        )
-        try await ensureAssets(for: [transcriber], locale: locale)
-        NSLog("Markup: dictation engine DictationTranscriber fallback (\(locale.identifier))")
-        return .dictation(transcriber)
-    }
-
-    private static func ensureAssets(for modules: [any SpeechModule], locale: Locale) async throws {
-        switch await AssetInventory.status(forModules: modules) {
-        case .installed:
-            _ = try? await AssetInventory.reserve(locale: locale)
-        case .supported, .downloading:
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: modules) {
-                try await request.downloadAndInstall()
-            }
-            _ = try? await AssetInventory.reserve(locale: locale)
-        case .unsupported:
-            throw MarkupError("Dictation is not supported on this Mac.")
-        @unknown default:
-            throw MarkupError("Dictation assets are unavailable.")
         }
     }
 
@@ -663,141 +844,5 @@ final class NoteDictationController {
             return left + " " + right
         }
         return left + " " + right
-    }
-
-    private static func formatsMatch(_ lhs: AVAudioFormat, _ rhs: AVAudioFormat) -> Bool {
-        lhs.sampleRate == rhs.sampleRate
-            && lhs.channelCount == rhs.channelCount
-            && lhs.commonFormat == rhs.commonFormat
-            && lhs.isInterleaved == rhs.isInterleaved
-    }
-
-    private static func copyPCMBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else {
-            return nil
-        }
-        copy.frameLength = buffer.frameLength
-        let source = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
-        let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
-        guard source.count == destination.count else { return nil }
-        for index in source.indices {
-            guard let from = source[index].mData, let to = destination[index].mData else { return nil }
-            memcpy(to, from, Int(source[index].mDataByteSize))
-        }
-        return copy
-    }
-}
-
-private enum PreparedTranscriber {
-    case speech(SpeechTranscriber)
-    case dictation(DictationTranscriber)
-}
-
-private final class PCMBufferConverter {
-    private let converter: AVAudioConverter
-    private let outputFormat: AVAudioFormat
-
-    init?(from inputFormat: AVAudioFormat, to outputFormat: AVAudioFormat) {
-        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            return nil
-        }
-        self.converter = converter
-        self.outputFormat = outputFormat
-    }
-
-    func convert(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        convert(buffer, endOfStream: false)
-    }
-
-    func drain() -> [AVAudioPCMBuffer] {
-        guard let buffer = convert(nil, endOfStream: true) else { return [] }
-        return [buffer]
-    }
-
-    private func convert(_ buffer: AVAudioPCMBuffer?, endOfStream: Bool) -> AVAudioPCMBuffer? {
-        let inFrames = buffer?.frameLength ?? 0
-        let ratio = outputFormat.sampleRate / (buffer?.format.sampleRate ?? outputFormat.sampleRate)
-        let capacity = max(1, AVAudioFrameCount((Double(inFrames) * ratio).rounded(.up)) + (endOfStream ? 1_024 : 32))
-        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else {
-            return nil
-        }
-
-        var supplied = false
-        var error: NSError?
-        converter.convert(to: output, error: &error) { _, status in
-            if endOfStream {
-                status.pointee = .endOfStream
-                return nil
-            }
-            if supplied {
-                status.pointee = .noDataNow
-                return nil
-            }
-            supplied = true
-            status.pointee = .haveData
-            return buffer
-        }
-
-        if error != nil || output.frameLength == 0 {
-            return nil
-        }
-        return output
-    }
-}
-
-/// RMS/peak from the mic tap, published on the main queue at ~50 Hz.
-private final class AudioLevelSink: @unchecked Sendable {
-    private let lock = NSLock()
-    private var handler: ((Float) -> Void)?
-    private var lastPublish = 0.0
-
-    func setHandler(_ handler: ((Float) -> Void)?) {
-        lock.lock()
-        self.handler = handler
-        lock.unlock()
-    }
-
-    func stop() {
-        setHandler(nil)
-    }
-
-    func ingest(_ buffer: AVAudioPCMBuffer) {
-        let level = PCMAmplitude.normalized(from: buffer)
-        let now = CFAbsoluteTimeGetCurrent()
-        lock.lock()
-        let shouldPublish = now - lastPublish >= 1.0 / 50.0
-        if shouldPublish {
-            lastPublish = now
-        }
-        let handler = self.handler
-        lock.unlock()
-        guard shouldPublish, let handler else { return }
-        DispatchQueue.main.async {
-            handler(level)
-        }
-    }
-}
-
-private enum PCMAmplitude {
-    static func normalized(from buffer: AVAudioPCMBuffer) -> Float {
-        let frames = Int(buffer.frameLength)
-        guard frames > 0, let channels = buffer.floatChannelData else { return 0 }
-
-        let channelCount = Int(buffer.format.channelCount)
-        var rms: Float = 0
-        var peak: Float = 0
-        for channel in 0..<max(channelCount, 1) {
-            let pointer = channels[channel]
-            var channelRMS: Float = 0
-            var channelPeak: Float = 0
-            vDSP_rmsqv(pointer, 1, &channelRMS, vDSP_Length(frames))
-            vDSP_maxmgv(pointer, 1, &channelPeak, vDSP_Length(frames))
-            rms = max(rms, channelRMS)
-            peak = max(peak, channelPeak)
-        }
-
-        let mixed = rms * 0.62 + peak * 0.38
-        if mixed < 0.0035 { return 0 }
-        return Float(min(1, pow(Double(mixed) * 12.5, 0.52)))
     }
 }

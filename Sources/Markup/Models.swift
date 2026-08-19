@@ -51,6 +51,8 @@ struct MarkupSettings: Codable, Equatable {
     var hotKey = HotKeySettings()
     var routes: [AppRoute] = []
     var topNotchEnabled = true
+    /// Prototype switch between Apple SpeechAnalyzer and Parakeet TDT v3.
+    var dictationEngine: TranscriptionEngineKind = .appleSpeech
 
     init() {}
 
@@ -58,6 +60,7 @@ struct MarkupSettings: Codable, Equatable {
         case hotKey
         case routes
         case topNotchEnabled
+        case dictationEngine
     }
 
     init(from decoder: Decoder) throws {
@@ -65,6 +68,7 @@ struct MarkupSettings: Codable, Equatable {
         hotKey = try container.decodeIfPresent(HotKeySettings.self, forKey: .hotKey) ?? HotKeySettings()
         routes = try container.decodeIfPresent([AppRoute].self, forKey: .routes) ?? []
         topNotchEnabled = try container.decodeIfPresent(Bool.self, forKey: .topNotchEnabled) ?? true
+        dictationEngine = try container.decodeIfPresent(TranscriptionEngineKind.self, forKey: .dictationEngine) ?? .appleSpeech
     }
 }
 

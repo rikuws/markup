@@ -44,7 +44,10 @@ final class CaptureCoordinator {
         // Snapshot before Markup activates — after that the frontmost app
         // is Markup, and geometry has to recover the window the user was on.
         let originPID = Self.currentOriginProcessID()
-        let session = LiveMarkupSession(originProcessID: originPID)
+        let session = LiveMarkupSession(
+            originProcessID: originPID,
+            dictationEngine: settingsStore.settings.dictationEngine
+        )
         session.onSaveRequested = { [weak self] in
             self?.saveSession()
         }
@@ -64,13 +67,13 @@ final class CaptureCoordinator {
         if NoteDictationController.needsMicrophonePrompt {
             Task { @MainActor in
                 await NoteDictationController.requestMicrophoneAccessIfNeeded()
-                Task { await NoteDictationController.prewarm() }
+                Task { await NoteDictationController.prewarm(engine: self.settingsStore.settings.dictationEngine) }
                 show()
             }
             return
         }
 
-        Task { await NoteDictationController.prewarm() }
+        Task { await NoteDictationController.prewarm(engine: settingsStore.settings.dictationEngine) }
         show()
     }
 

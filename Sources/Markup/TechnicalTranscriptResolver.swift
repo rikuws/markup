@@ -2,12 +2,19 @@ import Foundation
 
 /// Post-recognition reranker for Markup dictation.
 ///
+/// This is the correction stage after ASR:
+/// `audio → TranscriptionEngine → TechnicalTranscriptResolver → insertion`.
+///
 /// `SpeechTranscriber` has no `AnalysisContext.contextualStrings` hook, and the
 /// live `timeIndexedProgressiveTranscription` preset turns on `.fastResults`
 /// (faster, less accurate). Markup keeps live volatile text, drops that speed
 /// bias, asks for alternative hypotheses, then picks the candidate that best
 /// matches UI/design vocabulary — so “the you” can become “the UI” without
 /// rewriting “you should”.
+///
+/// Parakeet currently has no alternatives, so only the rewrite pass runs.
+/// FluidAudio also has CTC custom-vocabulary boosting for Parakeet TDT, but it
+/// needs a second 110M CTC model and is not wired in this prototype.
 struct TechnicalTranscriptResolver {
     /// App, window, page, and note tokens from the current markup session.
     var sessionTerms: [String] = []

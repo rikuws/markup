@@ -7,6 +7,7 @@ final class LiveListenCapsule: NSGlassEffectView {
     enum Mode {
         case off
         case preparing
+        case transcribing
         case listening
     }
 
@@ -73,7 +74,13 @@ final class LiveListenCapsule: NSGlassEffectView {
             decodeView.setTranscript(committed: committed, volatile: volatile)
         } else {
             decodeView.setTranscript(committed: "", volatile: "")
-            fallbackLabel.stringValue = mode == .preparing ? "Preparing" : "Listening"
+            fallbackLabel.stringValue = {
+                switch mode {
+                case .preparing: return "Preparing"
+                case .transcribing: return "Transcribing"
+                default: return "Listening"
+                }
+            }()
         }
 
         let spoken = [committed, volatile]
