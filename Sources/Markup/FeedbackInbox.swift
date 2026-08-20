@@ -111,6 +111,7 @@ final class FeedbackInbox {
         let id = metadata?.id.nonEmpty ?? directoryURL.lastPathComponent
         let note = userNote(from: instructionURL)
         let title = singleLineTitle(from: note).nonEmpty
+            ?? metadata?.hostedApp?.guestName.nonEmpty
             ?? metadata?.browser?.title.nonEmpty
             ?? metadata?.app?.windowTitle.nonEmpty
             ?? id
@@ -237,10 +238,15 @@ private struct InboxMetadata: Decodable {
         var annotatedScreenshot: String?
     }
 
+    struct Hosted: Decodable {
+        var guestName: String?
+    }
+
     var id: String?
     var createdAt: String?
     var app: App?
     var browser: BrowserPageContext?
+    var hostedApp: Hosted?
     var assets: Assets?
 }
 

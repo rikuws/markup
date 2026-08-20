@@ -53,11 +53,14 @@ final class FeedbackBundleWriter {
                     note: area.trimmedNote,
                     visibleText: visibleText.isEmpty ? nil : visibleText,
                     app: .init(
-                        bundleId: area.owner?.bundleId ?? MarkupArea.desktopRouteKey,
+                        bundleId: area.owner?.hostedApp?.guestBundleId
+                            ?? area.owner?.bundleId
+                            ?? MarkupArea.desktopRouteKey,
                         name: area.displayName,
                         windowTitle: area.owner?.windowTitle ?? area.displayName
                     ),
                     browser: area.owner?.browserPage,
+                    hostedApp: area.owner?.hostedApp,
                     capture: .init(
                         type: "liveArea/\(capture.source.rawValue)",
                         screenshotSize: .init(width: cgImage.width, height: cgImage.height),
@@ -81,6 +84,7 @@ final class FeedbackBundleWriter {
             createdAt: isoFormatter.string(from: now),
             app: primaryItem.app,
             browser: primaryItem.browser,
+            hostedApp: primaryItem.hostedApp,
             project: .init(
                 root: route.projectRoot,
                 feedbackPath: route.feedbackPath
@@ -128,7 +132,7 @@ final class FeedbackBundleWriter {
             : "Improve the UI/UX/code issues shown across the \(captures.count) marked areas in this bundle."
 
         return """
-        # Visual Feedback: \(primaryArea.owner?.windowTitle ?? primaryArea.displayName)
+        # Visual Feedback: \(instructionTitle(primaryArea))
 
         \(intro)
 
@@ -142,9 +146,9 @@ final class FeedbackBundleWriter {
 
         Context:
         - App under Area 1: \(primaryArea.displayName)
-        - Bundle ID: \(primaryArea.owner?.bundleId ?? MarkupArea.desktopRouteKey)
+        - Bundle ID: \(primaryArea.owner?.hostedApp?.guestBundleId ?? primaryArea.owner?.bundleId ?? MarkupArea.desktopRouteKey)
         - Window title: \(primaryArea.owner?.windowTitle ?? primaryArea.displayName)
-        \(browserContextMarkdown(primaryArea.owner?.browserPage))
+        \(extraRouteContextMarkdown(primaryArea.owner))
         - Captured at: \(metadata.createdAt)
         - Captured live from the screen when the user saved (schema v4 live areas).
 
@@ -179,16 +183,31 @@ final class FeedbackBundleWriter {
         .joined(separator: "\n")
     }
 
-    private func browserContextMarkdown(_ browserPage: BrowserPageContext?) -> String {
-        guard let browserPage else { return "" }
+    private func instructionTitle(_ area: MarkupArea) -> String {
+        area.owner?.hostedApp?.guestName
+            ?? area.owner?.windowTitle
+            ?? area.displayName
+    }
 
-        var lines = [
-            "- Browser route: \(browserPage.routeName)",
-            "- Browser title: \(browserPage.title)"
-        ]
+    private func extraRouteContextMarkdown(_ owner: AreaOwner?) -> String {
+        var lines: [String] = []
 
-        if let url = browserPage.url {
-            lines.append("- Browser URL: \(url)")
+        if let browserPage = owner?.browserPage {
+            lines.append("- Browser route: \(browserPage.routeName)")
+            lines.append("- Browser title: \(browserPage.title)")
+            if let url = browserPage.url {
+                lines.append("- Browser URL: \(url)")
+            }
+        }
+
+        if let hosted = owner?.hostedApp {
+            lines.append("- Hosted runtime: \(hosted.routeName)")
+            if let deviceName = hosted.deviceName, !deviceName.isEmpty {
+                lines.append("- Device: \(deviceName)")
+            }
+            if let guestBundleId = hosted.guestBundleId {
+                lines.append("- Guest bundle ID: \(guestBundleId)")
+            }
         }
 
         return lines.joined(separator: "\n")

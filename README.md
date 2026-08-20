@@ -37,7 +37,7 @@ That gives coding agents the same context a human reviewer would want: what app 
 | Multiple areas | Mark as many areas as you want, across apps and displays; each area gets its own note. |
 | Talk while you mark | Speak while you draw. Dictation defaults to Apple’s on-device `SpeechTranscriber` (the Notes engine) and reranks technical terms such as UI, UX, and SwiftUI. A prototype Parakeet TDT engine (FluidAudio/CoreML) can be selected in Settings for local batch comparison: its annotation shows a temporary decode while you speak and fills with editable text after a pause or as soon as a new area is released. A live waveform shows that Markup is hearing you, including while you drag. Speech from the moment you start a new drag lands only in that area (click an area to retarget). |
 | Save-time capture | Pixels are captured when you save, so you can reproduce the issue live while narrating it. |
-| Per-area routing | Each area detects the app it was drawn on and routes to that app's markup folder — native apps by identity, browser pages by local host, repository, Figma file, Google Doc, or host. |
+| Per-area routing | Each area detects the app it was drawn on and routes to that app's markup folder — native apps by identity, browser pages by local host, repository, Figma file, Google Doc, or host, and Simulator windows by the app running on the device. |
 | Feedback inbox | Review pending feedback by project, open screenshots, edit notes, reveal folders, or move handled items to Trash. |
 | Agent-ready files | Save `instruction.md`, `metadata.json`, screenshots, and originals in the target repo — one bundle per route. |
 
@@ -55,7 +55,7 @@ Markup requires macOS 26 (Tahoe) or newer for its Liquid Glass selection UI. The
 1. Press `Cmd+Shift+M` or choose **Mark Up Screen** from the menu bar item. The screen stays live — glass selection renders directly on top of whatever is running.
 2. Drag a glass area over the issue and say what’s wrong — Markup listens while you mark.
 3. Drag more areas anywhere on the screen. Speech from the moment you start that drag (and after you release) goes only to the new area. Click an existing area (or its caption chip) to add to its note, or type in the chip directly.
-4. Press Return or click Save. Each area's pixels are captured from the live screen, the app under each area is detected, and one bundle is written per project route — prompting for a folder the first time an app is seen, like before.
+4. Press Return or click Save. Each area's pixels are captured from the live screen, the app under each area is detected, and one bundle is written per project route — prompting for a folder the first time an app is seen, like before. Simulator captures route to the guest app, not to Simulator.app; if Markup can't tell which app is running, it asks where to save.
 5. Ask your coding agent to process the pending Markup feedback.
 
 The default feedback path is `.markup/feedback`, but each app or browser route can point at a different project root and relative feedback path.

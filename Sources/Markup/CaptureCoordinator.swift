@@ -123,8 +123,12 @@ final class CaptureCoordinator {
         let groups = draft.areasByRoute()
         var routes: [String: AppRoute] = [:]
         for group in groups {
-            let name = group.areas.first?.routeName ?? "Desktop"
-            guard let route = routeForSave(key: group.routeKey, name: name) else {
+            let sample = group.areas.first
+            guard let route = routeForSave(
+                key: group.routeKey,
+                name: sample?.routeName ?? "Desktop",
+                hostedApp: sample?.owner?.hostedApp
+            ) else {
                 session.resumeAfterFailedSave()
                 return
             }
@@ -165,19 +169,44 @@ final class CaptureCoordinator {
 
     // MARK: - Routes
 
-    private func routeForSave(key: String, name: String) -> AppRoute? {
-        if let route = settingsStore.route(for: key) {
+    private func routeForSave(key: String, name: String, hostedApp: HostedAppContext?) -> AppRoute? {
+        let persist = (hostedApp?.persistRoute ?? true) && !HostedAppContext.isEphemeralRouteKey(key)
+        if persist, let route = settingsStore.route(for: key) {
             return route
         }
 
         NSApp.activate(ignoringOtherApps: true)
+        let existing = persist ? settingsStore.route(for: key) : nil
+        let startingDirectory: URL?
+        if hostedApp == nil {
+            startingDirectory = nil
+        } else {
+            startingDirectory = existing?.projectRootURL
+                ?? settingsStore.route(for: HostedAppContextResolver.appleSimulatorBundleId)?.projectRootURL
+        }
         return RoutePrompts.configureRoute(
             bundleId: key,
             appName: name,
             settingsStore: settingsStore,
-            existingRoute: nil,
-            asksFeedbackPath: true
+            existingRoute: existing,
+            asksFeedbackPath: persist,
+            persist: persist,
+            startingDirectory: startingDirectory,
+            message: hostedPromptMessage(hostedApp, name: name)
         )
+    }
+
+    private func hostedPromptMessage(_ hostedApp: HostedAppContext?, name: String) -> String? {
+        guard let hostedApp, !hostedApp.persistRoute else { return nil }
+
+        switch hostedApp.hostKind {
+        case HostedAppContext.simulatorKind:
+            return "This capture is from the Simulator. Markup couldn't tell which app is running, so choose the project that should receive this feedback."
+        case HostedAppContext.androidEmulatorKind:
+            return "This capture is from Android Emulator. Choose the project that should receive this feedback."
+        default:
+            return "This capture is from a simulated device. Choose the project folder for \(name)."
+        }
     }
 
     // MARK: - Permissions and alerts
