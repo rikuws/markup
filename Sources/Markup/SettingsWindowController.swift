@@ -347,7 +347,7 @@ struct SettingsView: View {
     private var routesSection: some View {
         SettingsSection(
             title: "App Routes",
-            subtitle: "Apps route by app identity. Browser captures route by the current page or project."
+            subtitle: "Apps route by app identity. Browser captures route by the current page or project. Simulator captures route by the app running on the device."
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 if sortedRoutes.isEmpty {
@@ -397,6 +397,17 @@ struct SettingsView: View {
     private func addRouteForFrontmostApp() {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let target = RouteTargetResolver.target(for: app)
+        if let hosted = target.hostedApp, !hosted.persistRoute {
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "Choose a Project When You Save"
+            alert.informativeText = hosted.hostKind == HostedAppContext.simulatorKind
+                ? "Markup couldn't tell which app is running in the Simulator. Mark the screen and save — you'll be asked which project should receive that feedback."
+                : "Markup asks where to save feedback from this simulated device each time, because the window belongs to the emulator rather than the app inside it."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
         RoutePrompts.configureRoute(
             bundleId: target.key,
             appName: target.name,
@@ -574,15 +585,18 @@ enum RoutePrompts {
         settingsStore: SettingsStore,
         existingRoute: AppRoute? = nil,
         existingPath: String = ".markup/feedback",
-        asksFeedbackPath: Bool = true
+        asksFeedbackPath: Bool = true,
+        persist: Bool = true,
+        startingDirectory: URL? = nil,
+        message: String? = nil
     ) -> AppRoute? {
         let panel = NSOpenPanel()
-        panel.message = "Choose the project folder for \(appName)"
+        panel.message = message ?? "Choose the project folder for \(appName)"
         panel.prompt = "Use This Project"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.directoryURL = existingRoute?.projectRootURL
+        panel.directoryURL = existingRoute?.projectRootURL ?? startingDirectory
 
         guard panel.runModal() == .OK, let projectRoot = panel.url else {
             return nil
@@ -592,14 +606,25 @@ enum RoutePrompts {
         let feedbackPath = asksFeedbackPath
             ? promptFeedbackPath(appName: appName, existingPath: currentFeedbackPath)
             : currentFeedbackPath.trimmedFeedbackPath
-        settingsStore.upsertRoute(
+
+        if persist, !HostedAppContext.isEphemeralRouteKey(bundleId) {
+            settingsStore.upsertRoute(
+                bundleId: bundleId,
+                appName: appName,
+                projectRoot: projectRoot,
+                feedbackPath: feedbackPath
+            )
+            return settingsStore.route(for: bundleId)
+        }
+
+        return AppRoute(
             bundleId: bundleId,
             appName: appName,
-            projectRoot: projectRoot,
-            feedbackPath: feedbackPath
+            projectRoot: projectRoot.path,
+            feedbackPath: feedbackPath,
+            createdAt: Date(),
+            updatedAt: Date()
         )
-
-        return settingsStore.route(for: bundleId)
     }
 
     private static func promptFeedbackPath(appName: String, existingPath: String) -> String {

@@ -6,23 +6,68 @@ struct RouteTarget {
     var key: String
     var name: String
     var browserPage: BrowserPageContext?
+    var hostedApp: HostedAppContext?
 }
 
 enum RouteTargetResolver {
-    static func target(for app: NSRunningApplication, windowTitle: String? = nil) -> RouteTarget {
-        let bundleId = app.bundleIdentifier ?? "unknown.bundle"
-        let appName = app.localizedName ?? "Unknown App"
+    static func target(for app: NSRunningApplication, windowTitle: String? = nil, windowBounds: CGRect? = nil) -> RouteTarget {
+        var title = windowTitle
+        var bounds = windowBounds
+        if title == nil || bounds == nil,
+           let window = AreaWindowResolver.frontmostContentWindow(for: app.processIdentifier) {
+            title = title ?? window.windowTitle
+            bounds = bounds ?? window.bounds
+        }
 
-        if let browserPage = BrowserPageContextResolver.context(
-            for: app,
+        return target(
+            bundleId: app.bundleIdentifier ?? "unknown.bundle",
+            appName: app.localizedName ?? "Unknown App",
+            windowTitle: title ?? "",
+            windowBounds: bounds ?? .zero,
+            processIdentifier: app.processIdentifier,
+            runningApp: app
+        )
+    }
+
+    static func target(
+        bundleId: String,
+        appName: String,
+        windowTitle: String,
+        windowBounds: CGRect,
+        processIdentifier: pid_t,
+        runningApp: NSRunningApplication? = nil
+    ) -> RouteTarget {
+        if let hostedApp = HostedAppContextResolver.context(
+            hostBundleId: bundleId,
+            appName: appName,
+            windowTitle: windowTitle,
+            windowBounds: windowBounds,
+            processIdentifier: processIdentifier
+        ) {
+            return RouteTarget(
+                key: hostedApp.routeKey,
+                name: hostedApp.routeName,
+                browserPage: nil,
+                hostedApp: hostedApp
+            )
+        }
+
+        if let runningApp,
+           let browserPage = BrowserPageContextResolver.context(
+            for: runningApp,
             appName: appName,
             bundleId: bundleId,
             windowTitle: windowTitle
-        ) {
-            return RouteTarget(key: browserPage.routeKey, name: browserPage.routeName, browserPage: browserPage)
+           ) {
+            return RouteTarget(
+                key: browserPage.routeKey,
+                name: browserPage.routeName,
+                browserPage: browserPage,
+                hostedApp: nil
+            )
         }
 
-        return RouteTarget(key: bundleId, name: appName, browserPage: nil)
+        return RouteTarget(key: bundleId, name: appName, browserPage: nil, hostedApp: nil)
     }
 }
 
