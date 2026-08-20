@@ -50,12 +50,12 @@ final class NoteDictationController {
     private var tapInstalled = false
     private var converter: PCMBufferConverter?
     private var sampleAccumulator: PCMSampleAccumulator?
-    private var heldSlices: [CapturedAudio] = []
     private var analysisTask: Task<Void, Never>?
     private var resultTask: Task<Void, Never>?
     private var detectionTask: Task<Void, Never>?
     private var startTask: Task<Void, Never>?
     private var transcribeTask: Task<Void, Never>?
+    private var speechReleaseTask: Task<Void, Never>?
     private var sessionID = UUID()
     private var pendingStart = false
     private var recordingStartedAt: CFAbsoluteTime?
@@ -140,28 +140,10 @@ final class NoteDictationController {
         publishTranscript()
     }
 
-    /// Retargets the transcript stream to a new note without stopping the
-    /// analyzer. Later results are kept only if their audio starts after
-    /// this moment, so a new area never inherits earlier speech.
-    ///
-    /// For batch engines, call `takeHeldAudio()` after this to transcribe
-    /// speech that belonged to the previous target. Pass `captureHeldAudio:
-    /// false` when the current buffer already belongs to `note` (for example
-    /// after clicking an existing area).
-    func beginNewTarget(adopting note: String = "", captureHeldAudio: Bool = true) {
-        if usesBatchTranscription, captureHeldAudio {
-            let audio = sampleAccumulator?.take() ?? CapturedAudio(
-                samples: [],
-                sampleRate: DictationAudioFormat.parakeetSampleRate
-            )
-            stopRequestedAt = CFAbsoluteTimeGetCurrent()
-            DictationLatencyLog.stage(
-                "retarget captured \(String(format: "%.2f", audio.duration))s samples=\(audio.samples.count)"
-            )
-            if !audio.isEmpty {
-                heldSlices.append(audio)
-            }
-        }
+    /// Retargets the live transcript state without stopping capture. Batch
+    /// audio is cut explicitly by the session and bound to an area before this
+    /// method is called, so a late Parakeet result cannot land on a new target.
+    func beginNewTarget(adopting note: String = "") {
         clipPrefix = String(targetVolatile.characters)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         baseNote = note
@@ -187,27 +169,78 @@ final class NoteDictationController {
         publishTranscript()
     }
 
-    func takeHeldAudio() -> CapturedAudio? {
-        guard !heldSlices.isEmpty else { return nil }
-        return heldSlices.removeFirst()
+    /// Atomically cuts the current Parakeet buffer. The returned slice is
+    /// immutable and can safely wait in a target-bound transcription queue
+    /// while the microphone continues filling a fresh buffer.
+    func captureCurrentBatchAudio(
+        reason: String,
+        requestedAt: CFAbsoluteTime? = nil
+    ) -> BatchTranscriptionSlice? {
+        guard usesBatchTranscription else { return nil }
+        let capture = sampleAccumulator?.take() ?? PCMSampleAccumulator.Capture(
+            audio: CapturedAudio(samples: [], sampleRate: DictationAudioFormat.parakeetSampleRate),
+            containsLikelySpeech: false
+        )
+        let audio = capture.audio
+        let boundary = requestedAt ?? CFAbsoluteTimeGetCurrent()
+        DictationLatencyLog.stage(
+            "\(reason) captured \(String(format: "%.2f", audio.duration))s samples=\(audio.samples.count)"
+        )
+        return BatchTranscriptionSlice(
+            audio: audio,
+            requestedAt: boundary,
+            containsLikelySpeech: capture.containsLikelySpeech
+        )
+    }
+
+    func transcribeBatchAudio(_ slice: BatchTranscriptionSlice) async -> String {
+        guard usesBatchTranscription else { return "" }
+        return await runBatchTranscription(slice)
+    }
+
+    /// Keeps the controller's display/base note aligned after the session has
+    /// applied a target-bound Parakeet result directly to its owning area.
+    func syncBatchNote(_ note: String) {
+        guard usesBatchTranscription else { return }
+        baseNote = note
+        committedText = note
+        volatileText = ""
+        publishTranscript()
     }
 
     /// Transcribes the current (or held) capture for batch engines, or
     /// commits volatile Apple text. Safe to call on the Apple path.
     func finalizeCurrentUtterance() async {
         if usesBatchTranscription {
-            let audio = sampleAccumulator?.take() ?? CapturedAudio(samples: [], sampleRate: DictationAudioFormat.parakeetSampleRate)
-            let spoken = await runBatchTranscription(audio)
+            guard let slice = captureCurrentBatchAudio(
+                reason: "finalize",
+                requestedAt: stopRequestedAt
+            ) else { return }
+            let spoken = await runBatchTranscription(slice)
             applySpokenText(spoken)
             return
         }
         commitVolatile()
     }
 
-    /// Transcribe audio that `beginNewTarget()` sliced off for the previous area.
-    func transcribeHeldAudio() async -> String {
-        guard let audio = takeHeldAudio() else { return "" }
-        return await runBatchTranscription(audio)
+    /// Stops the mic while keeping its final converted samples available for a
+    /// session-owned, target-bound batch request.
+    func pauseBatchCapture() {
+        guard usesBatchTranscription, state == .listening || state == .preparing else { return }
+        pendingStart = false
+        startTask?.cancel()
+        startTask = nil
+        stopRequestedAt = CFAbsoluteTimeGetCurrent()
+        state = .transcribing
+        stopCaptureKeepingAccumulator()
+    }
+
+    func completeBatchPause() {
+        guard usesBatchTranscription else { return }
+        teardownSession(finalize: false)
+        if state != .unavailable {
+            state = .muted
+        }
     }
 
     func startListening() {
@@ -288,7 +321,6 @@ final class NoteDictationController {
         resetAudioClockKeepingNote()
         recordingStartedAt = CFAbsoluteTimeGetCurrent()
         stopRequestedAt = nil
-        heldSlices = []
 
         do {
             if usesBatchTranscription {
@@ -657,7 +689,8 @@ final class NoteDictationController {
     }
 
     /// audio → ASR → TechnicalTranscriptResolver → insertion
-    private func runBatchTranscription(_ audio: CapturedAudio) async -> String {
+    private func runBatchTranscription(_ slice: BatchTranscriptionSlice) async -> String {
+        let audio = slice.audio
         DictationLatencyLog.stage("audio ready duration=\(String(format: "%.2f", audio.duration))s samples=\(audio.samples.count)")
         guard !audio.isEmpty else {
             DictationLatencyLog.stage("empty transcription (no captured samples)")
@@ -675,12 +708,7 @@ final class NoteDictationController {
             if spoken.isEmpty {
                 DictationLatencyLog.stage("empty transcription (model returned no text)")
             }
-            let stopToText: TimeInterval
-            if let stopRequestedAt {
-                stopToText = CFAbsoluteTimeGetCurrent() - stopRequestedAt
-            } else {
-                stopToText = result.inferenceDuration
-            }
+            let stopToText = CFAbsoluteTimeGetCurrent() - slice.requestedAt
             DictationLatencyLog.summary(
                 engine: engineKind,
                 audioDuration: audio.duration,
@@ -709,7 +737,21 @@ final class NoteDictationController {
     private func handleAudioLevel(_ level: Float) {
         guard state == .listening else { return }
         if usesBatchTranscription {
-            speechDetected = level > 0.04
+            if level > 0.04 {
+                speechReleaseTask?.cancel()
+                speechReleaseTask = nil
+                speechDetected = true
+            } else if speechDetected, speechReleaseTask == nil {
+                // Raw level samples dip between syllables. Hold the active
+                // state long enough to make one natural utterance (and one
+                // visual decode) instead of dozens of tiny Parakeet jobs.
+                speechReleaseTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(450))
+                    guard let self, !Task.isCancelled, self.state == .listening else { return }
+                    self.speechReleaseTask = nil
+                    self.speechDetected = false
+                }
+            }
         }
         onAudioLevelChanged?(level)
     }
@@ -754,9 +796,11 @@ final class NoteDictationController {
         analysisTask?.cancel()
         resultTask?.cancel()
         detectionTask?.cancel()
+        speechReleaseTask?.cancel()
         analysisTask = nil
         resultTask = nil
         detectionTask = nil
+        speechReleaseTask = nil
         speechDetected = false
 
         let analyzerToFinish = analyzer

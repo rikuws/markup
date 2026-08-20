@@ -52,12 +52,12 @@ Revisit WhisperKit only if live `SpeechTranscriber` plus the resolver still mang
 ASR is now behind `TranscriptionEngine`. Apple `SpeechAnalyzer` stays the default and keeps live volatile text. Parakeet is a batch path for stop-to-text comparison:
 
 ```text
-start listening → capture 16 kHz mono PCM in memory → mute / retarget / save → Parakeet transcribe → TechnicalTranscriptResolver → insert
+start listening → capture 16 kHz mono PCM in memory → pause / mouse-up / mute / retarget / save → Parakeet transcribe → TechnicalTranscriptResolver → insert into the captured area
 ```
 
 Switch engines in **Settings → Dictation engine**. The first Parakeet prepare downloads `FluidInference/parakeet-tdt-0.6b-v3-coreml` into `~/Library/Application Support/FluidAudio/Models/` and keeps `AsrManager` warm for the process. Console lines tagged `[Dictation]` report `audioDuration`, `inference`, `stopToText`, and `rtfx`.
 
-Parakeet does not stream partials. The HUD shows **Transcribing** after mute. FluidAudio CTC custom-vocabulary boosting exists for batch TDT but needs a second 110M CTC model and is not wired; keep `TechnicalTranscriptResolver` as the post-ASR correction seam.
+Parakeet does not stream partials. While an existing annotation is receiving speech, its chip shows a synthetic, non-saveable decode so capture has immediate feedback; after a short speech pause it changes to **Transcribing** and is atomically replaced by the editable result. If the annotation does not exist yet, mouse-up creates it and immediately submits that area-bound audio. FluidAudio CTC custom-vocabulary boosting exists for batch TDT but needs a second 110M CTC model and is not wired; keep `TechnicalTranscriptResolver` as the post-ASR correction seam.
 
 `Language` on `AsrManager.transcribe` is a Latin/Cyrillic/Greek script filter, not a Finnish-vs-English language lock. Mixed Finnish + English technical speech stays Latin. FluidAudio’s FLEURS notes put Finnish around 13% WER; v3 can lag v2 on rare English tokens.
 
@@ -126,4 +126,4 @@ Keep the session view first responder while listening. Gate Escape (mute vs canc
   - “make the UI feel lighter” / “the UX is confusing” / “open the API”
   - “use SwiftUI” / “the Figma version looks better”
   - “you should change the UI” / “I think you should simplify the UI”
-- Parakeet prototype: Settings → Dictation engine → Parakeet. First run downloads the CoreML model. Speak 3–5 seconds, mute, confirm text appears promptly. Console should log `[Dictation] engine=Parakeet ...`. Switch back to Apple and compare `stopToText`. Mixed Finnish + English technical phrases should stay Latin-script.
+- Parakeet prototype: Settings → Dictation engine → Parakeet. First run downloads the CoreML model. Speak over an existing area and confirm its decode runs while talking, then resolves after a short pause. Speak while drawing a new area and confirm mouse-up starts transcription without another gesture. Rapidly draw a second area and confirm late results remain on their original areas. Console should log `[Dictation] engine=Parakeet ...`. Switch back to Apple and compare `stopToText`. Mixed Finnish + English technical phrases should stay Latin-script.

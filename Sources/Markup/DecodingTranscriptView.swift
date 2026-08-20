@@ -4,6 +4,8 @@ import AppKit
 /// current hypothesis and lock once that character has been stable. Layout
 /// is measured from the real target string so the host does not jitter.
 final class DecodingTranscriptView: NSView {
+    var onIntrinsicSizeInvalidated: (() -> Void)?
+
     var font = NSFont.systemFont(ofSize: 13, weight: .medium) {
         didSet {
             invalidateIntrinsicContentSize()
@@ -30,7 +32,10 @@ final class DecodingTranscriptView: NSView {
 
     private var slots: [Slot] = []
     private var displayedVolatile = ""
+    private var indeterminateStatus: String?
+    private var displayedIndeterminate = ""
     private var timer: Timer?
+    private var accessibilityOptionsObserver: NSObjectProtocol?
 
     override var isFlipped: Bool { true }
     override var isOpaque: Bool { false }
@@ -39,6 +44,15 @@ final class DecodingTranscriptView: NSView {
         super.init(frame: frameRect)
         translatesAutoresizingMaskIntoConstraints = false
         setAccessibilityElement(false)
+        accessibilityOptionsObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.accessibilityDisplayOptionsDidChange()
+            }
+        }
     }
 
     required init?(coder: NSCoder) {
@@ -47,6 +61,9 @@ final class DecodingTranscriptView: NSView {
 
     deinit {
         timer?.invalidate()
+        if let accessibilityOptionsObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(accessibilityOptionsObserver)
+        }
     }
 
     func noteVisibilityChanged() {
@@ -67,7 +84,15 @@ final class DecodingTranscriptView: NSView {
     }
 
     override var intrinsicContentSize: NSSize {
-        let text = Self.joined(committed, volatile)
+        let trailing: String
+        if let indeterminateStatus {
+            trailing = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                ? indeterminateStatus
+                : Self.indeterminateLayoutSample
+        } else {
+            trailing = volatile
+        }
+        let text = Self.joined(committed, trailing)
         guard !text.isEmpty else { return .zero }
         let rect = NSAttributedString(string: text, attributes: Self.layoutAttributes(font: font))
             .boundingRect(
@@ -80,7 +105,24 @@ final class DecodingTranscriptView: NSView {
     func setTranscript(committed: String, volatile: String) {
         self.committed = committed
         self.volatile = volatile
+        indeterminateStatus = nil
+        displayedIndeterminate = ""
         retargetSlotsIfNeeded()
+        render(now: CFAbsoluteTimeGetCurrent())
+        invalidateIntrinsicContentSize()
+        onIntrinsicSizeInvalidated?()
+        updateTimer()
+    }
+
+    /// Shows capture/conversion activity before a batch engine has real words
+    /// to offer. The glyphs are deliberately view-only and never enter the
+    /// annotation model or accessibility value.
+    func setIndeterminate(committed: String, status: String) {
+        self.committed = committed
+        volatile = ""
+        slots = []
+        displayedVolatile = ""
+        indeterminateStatus = status
         render(now: CFAbsoluteTimeGetCurrent())
         invalidateIntrinsicContentSize()
         updateTimer()
@@ -92,19 +134,24 @@ final class DecodingTranscriptView: NSView {
         let lockedAttrs = Self.layoutAttributes(font: font, color: NSColor.labelColor.withAlphaComponent(0.86))
         let unlockedAttrs = Self.layoutAttributes(font: font, color: NSColor.secondaryLabelColor)
 
+        let trailing = indeterminateStatus == nil ? displayedVolatile : displayedIndeterminate
         if !committed.isEmpty {
             text.append(NSAttributedString(string: committed, attributes: committedAttrs))
-            if !displayedVolatile.isEmpty {
+            if !trailing.isEmpty {
                 text.append(NSAttributedString(string: " ", attributes: committedAttrs))
             }
         }
 
-        for (index, character) in displayedVolatile.enumerated() {
-            let locked = index < slots.count ? slots[index].locked : true
-            text.append(NSAttributedString(
-                string: String(character),
-                attributes: locked ? lockedAttrs : unlockedAttrs
-            ))
+        if indeterminateStatus != nil {
+            text.append(NSAttributedString(string: trailing, attributes: unlockedAttrs))
+        } else {
+            for (index, character) in displayedVolatile.enumerated() {
+                let locked = index < slots.count ? slots[index].locked : true
+                text.append(NSAttributedString(
+                    string: String(character),
+                    attributes: locked ? lockedAttrs : unlockedAttrs
+                ))
+            }
         }
 
         text.draw(with: bounds, options: [.usesLineFragmentOrigin, .usesFontLeading])
@@ -131,6 +178,14 @@ final class DecodingTranscriptView: NSView {
     }
 
     private func render(now: CFAbsoluteTime) {
+        if let indeterminateStatus {
+            displayedIndeterminate = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                ? indeterminateStatus
+                : Self.randomPlaceholder()
+            needsDisplay = true
+            return
+        }
+
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             displayedVolatile = volatile
             for index in slots.indices {
@@ -172,13 +227,12 @@ final class DecodingTranscriptView: NSView {
     private func updateTimer() {
         let shouldRun = window != nil
             && !isHiddenOrHasHiddenAncestor
-            && !slots.isEmpty
-            && slots.contains(where: { !$0.locked })
+            && (indeterminateStatus != nil || slots.contains(where: { !$0.locked }))
             && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
 
         if shouldRun {
             guard timer == nil else { return }
-            let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            let timer = Timer(timeInterval: indeterminateStatus == nil ? 1.0 / 30.0 : 1.0 / 18.0, repeats: true) { [weak self] _ in
                 self?.tick()
             }
             timer.tolerance = 0.008
@@ -190,6 +244,15 @@ final class DecodingTranscriptView: NSView {
         }
     }
 
+    private func accessibilityDisplayOptionsDidChange() {
+        timer?.invalidate()
+        timer = nil
+        render(now: CFAbsoluteTimeGetCurrent())
+        invalidateIntrinsicContentSize()
+        onIntrinsicSizeInvalidated?()
+        updateTimer()
+    }
+
     private func tick() {
         if isHiddenOrHasHiddenAncestor {
             timer?.invalidate()
@@ -197,7 +260,7 @@ final class DecodingTranscriptView: NSView {
             return
         }
         render(now: CFAbsoluteTimeGetCurrent())
-        if slots.allSatisfy(\.locked) {
+        if indeterminateStatus == nil, slots.allSatisfy(\.locked) {
             timer?.invalidate()
             timer = nil
         }
@@ -227,6 +290,13 @@ final class DecodingTranscriptView: NSView {
     private static let lowerGlyphs = Array("aeiouyrtnslhcdmpbfgwkvxqz")
     private static let upperGlyphs = Array("AEIOUYRTNSLHCDMPBFGWKVXQZ")
     private static let digits = Array("0123456789")
+    private static let indeterminateLayoutSample = "mmmmmm mmmmmmmm"
+
+    private static func randomPlaceholder() -> String {
+        let first = String((0..<6).map { _ in lowerGlyphs.randomElement() ?? "m" })
+        let second = String((0..<8).map { _ in lowerGlyphs.randomElement() ?? "m" })
+        return first + " " + second
+    }
 
     private static func randomGlyph(matching target: Character) -> Character {
         if target.isNumber { return digits.randomElement() ?? target }

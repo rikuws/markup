@@ -223,7 +223,7 @@ struct SettingsView: View {
     private var dictationEngineSection: some View {
         SettingsSection(
             title: "Dictation engine",
-            subtitle: "Prototype switch. Apple streams live text. Parakeet records, then transcribes locally with FluidAudio after you mute or retarget."
+            subtitle: "Prototype switch. Apple streams live text. Parakeet shows a temporary decode, then fills the annotation locally after a pause or mouse-up."
         ) {
             VStack(alignment: .leading, spacing: 10) {
                 Picker(
@@ -248,7 +248,7 @@ struct SettingsView: View {
 
                 parakeetStatusRow
 
-                Text("Parakeet transcribes locally after you mute or start a new area. Latency lines are tagged [Dictation] in Console.app (filter the Markup process).")
+                Text("Parakeet transcribes locally after a speech pause, mouse-up, or mute. Latency lines are tagged [Dictation] in Console.app (filter the Markup process).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -36,6 +36,11 @@ final class LiveSelectionWindow: NSWindow {
 /// `@MainActor` dictation controller can be driven directly — the same
 /// footing the 1.x annotation view controller had.
 final class LiveMarkupSession: NSResponder {
+    private struct PendingBatchSegment {
+        var areaID: UUID
+        var slice: BatchTranscriptionSlice
+    }
+
     let draft = LiveMarkupDraft()
 
     var onSaveRequested: (() -> Void)?
@@ -49,10 +54,20 @@ final class LiveMarkupSession: NSResponder {
     private var windows: [LiveSelectionWindow] = []
     private var views: [LiveSelectionView] = []
     private var hud: SessionHUDView?
-    private var isEditingActiveNote = false
+    private var editingAreaID: UUID?
     /// True between the start of a new-area drag and mouse-up, so speech
     /// during the drag stays off the previous area.
     private var pendingNewArea = false
+    private var batchChunkHasSpeech = false
+    private var batchSpeakingAreaID: UUID?
+    private var batchPendingCounts: [UUID: Int] = [:]
+    private var deferredBatchText: [UUID: [String]] = [:]
+    /// Completed speech heard before an area exists. These immutable slices
+    /// are bound to the first successfully created area at mouse-up.
+    private var unassignedBatchSlices: [BatchTranscriptionSlice] = []
+    private var batchQueue: [PendingBatchSegment] = []
+    private var batchWorker: Task<Void, Never>?
+    private var batchPauseTask: Task<Void, Never>?
     private var isEnded = false
     private var isSaving = false
     private var becomeActiveObserver: NSObjectProtocol?
@@ -140,6 +155,8 @@ final class LiveMarkupSession: NSResponder {
     }
 
     func resumeAfterFailedSave() {
+        isSaving = false
+        setSessionInteractionEnabled(true)
         activateForSession()
         presentWindows()
         dictation.startListening()
@@ -150,6 +167,15 @@ final class LiveMarkupSession: NSResponder {
         guard !isEnded else { return }
         isEnded = true
         pendingNewArea = false
+        batchWorker?.cancel()
+        batchPauseTask?.cancel()
+        batchWorker = nil
+        batchPauseTask = nil
+        batchQueue.removeAll()
+        batchPendingCounts.removeAll()
+        deferredBatchText.removeAll()
+        unassignedBatchSlices.removeAll()
+        batchSpeakingAreaID = nil
         stopActivationObserver()
         popCrosshairIfNeeded()
         dictation.teardown()
@@ -167,23 +193,24 @@ final class LiveMarkupSession: NSResponder {
     /// Called as soon as a drag is a real new-area gesture. Speech from this
     /// moment on belongs to the area that will be created on mouse-up.
     func startNewAreaDrag() {
-        guard !pendingNewArea, draft.canAddArea, let previous = draft.activeArea else { return }
+        guard !pendingNewArea, draft.canAddArea else { return }
 
         pendingNewArea = true
-        if !dictation.usesBatchTranscription {
+        guard let previous = draft.activeArea else {
+            refreshTexts()
+            updateHUD()
+            return
+        }
+
+        if dictation.usesBatchTranscription {
+            batchSpeakingAreaID = nil
+            enqueueCurrentBatchAudio(for: previous.id, reason: "new-area drag")
+        } else {
             commitVolatileIntoActiveArea()
         }
         dictation.beginNewTarget()
         refreshTexts()
         updateHUD()
-
-        guard dictation.usesBatchTranscription else { return }
-        Task { @MainActor in
-            let spoken = await self.dictation.transcribeHeldAudio()
-            previous.note = Self.joinNotes(previous.note, spoken)
-            self.refreshTexts()
-            self.updateHUD()
-        }
     }
 
     /// Drag was abandoned (too small, or the session cannot take another
@@ -193,9 +220,28 @@ final class LiveMarkupSession: NSResponder {
         guard pendingNewArea else { return }
         pendingNewArea = false
 
-        guard let area = draft.activeArea else { return }
+        guard let area = draft.activeArea else {
+            // There is nowhere safe to route an utterance from an abandoned
+            // first drag. Drop it now so a later area does not inherit that
+            // speech or an arbitrarily long tail of silence.
+            if dictation.usesBatchTranscription {
+                batchSpeakingAreaID = nil
+                discardCurrentBatchAudio(reason: "abandoned drag without area")
+                batchChunkHasSpeech = false
+            }
+            refreshTexts()
+            updateHUD()
+            return
+        }
         if dictation.usesBatchTranscription {
             dictation.resumeTarget(adopting: area.note)
+            if batchChunkHasSpeech {
+                if dictation.speechDetected {
+                    batchSpeakingAreaID = area.id
+                } else {
+                    enqueueCurrentBatchAudio(for: area.id, reason: "abandoned drag")
+                }
+            }
         } else {
             area.note = Self.joinNotes(area.note, dictation.committedText, dictation.volatileText)
             area.volatileNote = ""
@@ -246,7 +292,18 @@ final class LiveMarkupSession: NSResponder {
         pendingNewArea = false
         area.note = incomingNote
         area.volatileNote = incomingVolatile
-        isEditingActiveNote = false
+        editingAreaID = nil
+
+        if dictation.usesBatchTranscription {
+            batchSpeakingAreaID = nil
+            enqueueUnassignedBatchAudio(for: area.id)
+            enqueueCurrentBatchAudio(for: area.id, reason: "area mouse-up")
+            dictation.beginNewTarget(adopting: area.note)
+            if dictation.state == .listening, dictation.speechDetected {
+                batchSpeakingAreaID = area.id
+                batchChunkHasSpeech = true
+            }
+        }
 
         refreshAll()
         view.runWave(areaID: area.id, releasePoint: releasePoint)
@@ -256,14 +313,26 @@ final class LiveMarkupSession: NSResponder {
         guard draft.activeAreaID != id, draft.areas.contains(where: { $0.id == id }) else { return }
 
         abortNewAreaDrag()
+        if dictation.usesBatchTranscription {
+            if let previousID = draft.activeAreaID {
+                batchSpeakingAreaID = nil
+                enqueueCurrentBatchAudio(for: previousID, reason: "area retarget")
+            }
+            draft.activate(id)
+            dictation.beginNewTarget(adopting: draft.activeArea?.note ?? "")
+            if dictation.state == .listening, dictation.speechDetected {
+                batchSpeakingAreaID = id
+                batchChunkHasSpeech = true
+            }
+            refreshAll()
+            return
+        }
+
         Task { @MainActor in
             await self.dictation.finalizeCurrentUtterance()
             self.commitVolatileIntoActiveArea()
             self.draft.activate(id)
-            self.dictation.beginNewTarget(
-                adopting: self.draft.activeArea?.note ?? "",
-                captureHeldAudio: false
-            )
+            self.dictation.beginNewTarget(adopting: self.draft.activeArea?.note ?? "")
             self.refreshAll()
         }
     }
@@ -271,14 +340,30 @@ final class LiveMarkupSession: NSResponder {
     func removeArea(id: UUID) {
         abortNewAreaDrag()
         let wasActive = draft.activeAreaID == id
+        if wasActive, dictation.usesBatchTranscription {
+            discardCurrentBatchAudio(reason: "active area deleted")
+        }
         draft.removeArea(id: id)
+        batchQueue.removeAll { $0.areaID == id }
+        batchPendingCounts[id] = nil
+        deferredBatchText[id] = nil
+        if batchSpeakingAreaID == id {
+            batchSpeakingAreaID = nil
+        }
+        if editingAreaID == id {
+            editingAreaID = nil
+        }
 
         if wasActive {
-            dictation.beginNewTarget(
-                adopting: draft.activeArea?.note ?? "",
-                captureHeldAudio: false
-            )
-            isEditingActiveNote = false
+            dictation.beginNewTarget(adopting: draft.activeArea?.note ?? "")
+            if dictation.usesBatchTranscription,
+               dictation.state == .listening,
+               dictation.speechDetected,
+               let activeID = draft.activeAreaID {
+                batchSpeakingAreaID = activeID
+                batchChunkHasSpeech = true
+            }
+            editingAreaID = nil
         }
 
         refreshAll()
@@ -298,12 +383,13 @@ final class LiveMarkupSession: NSResponder {
 
     func noteEditingChanged(id: UUID, isEditing: Bool) {
         if isEditing {
+            editingAreaID = id
             activateArea(id: id)
-        }
-        if id == draft.activeAreaID {
-            isEditingActiveNote = isEditing
+        } else if editingAreaID == id {
+            editingAreaID = nil
         }
         if !isEditing {
+            applyDeferredBatchText(to: id)
             refreshTexts()
         }
     }
@@ -314,14 +400,22 @@ final class LiveMarkupSession: NSResponder {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
                 NSWorkspace.shared.open(url)
             }
-        default:
-            dictation.toggleMuted()
+        case .muted, .idle:
+            dictation.startListening()
+        case .listening, .preparing:
+            muteListening()
+        case .transcribing:
+            break
         }
     }
 
     // MARK: - Keyboard
 
     private func handleKeyEvent(_ event: NSEvent) -> Bool {
+        if isSaving {
+            return true
+        }
+
         // A note field is being edited; let the field editor own the keys.
         if event.window?.firstResponder is NSTextView {
             return false
@@ -333,7 +427,7 @@ final class LiveMarkupSession: NSResponder {
                 return true
             }
             if dictation.isListening || dictation.state == .preparing {
-                dictation.mute()
+                muteListening()
                 return true
             }
             cancel()
@@ -354,15 +448,58 @@ final class LiveMarkupSession: NSResponder {
 
     func requestSave() {
         guard !isSaving else { return }
-        abortNewAreaDrag()
         isSaving = true
+        setSessionInteractionEnabled(false)
+        for view in views {
+            view.endNoteEditing()
+        }
+        abortNewAreaDrag()
+        let pauseAlreadyInFlight = batchPauseTask
+
         Task { @MainActor in
-            await self.dictation.finalizeCurrentUtterance()
-            self.commitVolatileIntoActiveArea()
+            if self.dictation.usesBatchTranscription {
+                if let pauseAlreadyInFlight {
+                    // Preserve a Save click/Return pressed while Mute is still
+                    // converting audio instead of silently dropping it.
+                    await pauseAlreadyInFlight.value
+                } else {
+                    self.dictation.pauseBatchCapture()
+                    self.batchSpeakingAreaID = nil
+                    if let activeID = self.draft.activeAreaID {
+                        self.enqueueCurrentBatchAudio(for: activeID, reason: "save")
+                    } else {
+                        self.holdCurrentBatchAudio(reason: "save without area")
+                    }
+                    self.batchChunkHasSpeech = false
+                }
+
+                guard !self.isEnded else { return }
+                await self.waitForBatchQueue()
+                guard !self.isEnded else { return }
+                if pauseAlreadyInFlight == nil {
+                    self.dictation.completeBatchPause()
+                }
+            } else {
+                await self.dictation.finalizeCurrentUtterance()
+                guard !self.isEnded else { return }
+                self.commitVolatileIntoActiveArea()
+            }
+
+            // Ending editing before the await is normally sufficient because
+            // mouse/key input is frozen, but repeat it at the mutation boundary
+            // so a field editor can never overwrite a late ASR merge.
+            for view in self.views {
+                view.endNoteEditing()
+            }
+            self.applyAllDeferredBatchText()
 
             guard self.draft.isComplete else {
                 self.isSaving = false
+                self.setSessionInteractionEnabled(true)
                 NSSound.beep()
+                if self.dictation.usesBatchTranscription {
+                    self.dictation.startListening()
+                }
                 // Retarget dictation at the first area still missing a note so
                 // the user can just start talking.
                 if let missing = self.draft.firstAreaMissingNote {
@@ -392,6 +529,9 @@ final class LiveMarkupSession: NSResponder {
         dictation.onSpeechDetectedChanged = { [weak self] detected in
             guard let self else { return }
             self.hud?.listeningChip.speechDetected = detected
+            if self.dictation.usesBatchTranscription {
+                self.handleBatchSpeechDetected(detected)
+            }
             self.publishListenFeedback()
         }
         dictation.onAudioLevelChanged = { [weak self] level in
@@ -404,7 +544,10 @@ final class LiveMarkupSession: NSResponder {
         dictation.onTranscriptChanged = { [weak self] committed, volatile in
             guard let self else { return }
             self.publishListenFeedback()
-            guard !self.isEditingActiveNote else { return }
+            if let editingAreaID = self.editingAreaID,
+               editingAreaID == self.draft.activeAreaID {
+                return
+            }
             // During a new-area drag the controller already holds only this
             // target's speech; do not write it onto the previous area.
             guard !self.pendingNewArea, let area = self.draft.activeArea else { return }
@@ -437,6 +580,191 @@ final class LiveMarkupSession: NSResponder {
         }
     }
 
+    private var annotationDictationPhases: [UUID: AnnotationDictationPhase] {
+        var phases: [UUID: AnnotationDictationPhase] = [:]
+        let existingIDs = Set(draft.areas.map(\.id))
+        for (id, count) in batchPendingCounts where count > 0 && existingIDs.contains(id) {
+            phases[id] = .transcribing
+        }
+        if let batchSpeakingAreaID, existingIDs.contains(batchSpeakingAreaID) {
+            phases[batchSpeakingAreaID] = .listening
+        }
+        return phases
+    }
+
+    private func handleBatchSpeechDetected(_ detected: Bool) {
+        guard dictation.state == .listening else {
+            if !detected, batchSpeakingAreaID != nil {
+                batchSpeakingAreaID = nil
+                refreshTexts()
+            }
+            return
+        }
+
+        if detected {
+            batchChunkHasSpeech = true
+            if !pendingNewArea,
+               let activeID = draft.activeAreaID,
+               editingAreaID != activeID {
+                batchSpeakingAreaID = activeID
+                refreshTexts()
+            }
+            return
+        }
+
+        let targetID = batchSpeakingAreaID ?? (pendingNewArea ? nil : draft.activeAreaID)
+        batchSpeakingAreaID = nil
+        if let targetID, batchChunkHasSpeech, !pendingNewArea {
+            enqueueCurrentBatchAudio(for: targetID, reason: "speech pause")
+        } else if !pendingNewArea, draft.activeAreaID == nil, batchChunkHasSpeech {
+            // Rotate ownerless speech into a bounded holding buffer. The first
+            // successful mouse-up gives it a stable target without retaining
+            // an arbitrarily long tail of silence in the live accumulator.
+            holdCurrentBatchAudio(reason: "speech pause without area")
+            batchChunkHasSpeech = false
+        } else {
+            refreshTexts()
+        }
+    }
+
+    private func enqueueCurrentBatchAudio(for areaID: UUID, reason: String) {
+        guard dictation.usesBatchTranscription else { return }
+        guard let slice = dictation.captureCurrentBatchAudio(reason: reason) else { return }
+        batchChunkHasSpeech = dictation.state == .listening && dictation.speechDetected
+        enqueueBatchAudio(slice, for: areaID)
+    }
+
+    private func enqueueBatchAudio(_ slice: BatchTranscriptionSlice, for areaID: UUID) {
+        guard slice.containsLikelySpeech else { return }
+        batchPendingCounts[areaID, default: 0] += 1
+        batchQueue.append(PendingBatchSegment(areaID: areaID, slice: slice))
+        refreshTexts()
+        startBatchWorkerIfNeeded()
+    }
+
+    private func enqueueUnassignedBatchAudio(for areaID: UUID) {
+        let slices = unassignedBatchSlices
+        unassignedBatchSlices.removeAll(keepingCapacity: true)
+        for slice in slices {
+            enqueueBatchAudio(slice, for: areaID)
+        }
+    }
+
+    private func holdCurrentBatchAudio(reason: String) {
+        guard dictation.usesBatchTranscription else { return }
+        guard let slice = dictation.captureCurrentBatchAudio(reason: reason) else { return }
+        batchChunkHasSpeech = dictation.state == .listening && dictation.speechDetected
+        guard slice.containsLikelySpeech else { return }
+
+        unassignedBatchSlices.append(slice)
+        // Keep natural multi-sentence dictation, but cap ownerless history so
+        // an unattended session cannot grow without bound. A single long
+        // utterance is retained whole rather than truncated mid-word.
+        while unassignedBatchSlices.count > 1,
+              unassignedBatchSlices.count > 8
+                || unassignedBatchSlices.reduce(0, { $0 + $1.audio.duration }) > 30 {
+            unassignedBatchSlices.removeFirst()
+        }
+    }
+
+    private func discardCurrentBatchAudio(reason: String) {
+        guard dictation.usesBatchTranscription else { return }
+        _ = dictation.captureCurrentBatchAudio(reason: reason)
+        batchChunkHasSpeech = dictation.state == .listening && dictation.speechDetected
+    }
+
+    private func startBatchWorkerIfNeeded() {
+        guard batchWorker == nil, !batchQueue.isEmpty else { return }
+        batchWorker = Task { @MainActor [weak self] in
+            await self?.runBatchWorker()
+        }
+    }
+
+    private func runBatchWorker() async {
+        while !Task.isCancelled, !batchQueue.isEmpty {
+            let segment = batchQueue.removeFirst()
+            let spoken = await dictation.transcribeBatchAudio(segment.slice)
+            guard !Task.isCancelled, !isEnded else { break }
+            applyBatchResult(spoken, to: segment.areaID)
+        }
+        batchWorker = nil
+    }
+
+    private func applyBatchResult(_ spoken: String, to areaID: UUID) {
+        if let count = batchPendingCounts[areaID] {
+            if count > 1 {
+                batchPendingCounts[areaID] = count - 1
+            } else {
+                batchPendingCounts[areaID] = nil
+            }
+        }
+
+        let trimmed = spoken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            if editingAreaID == areaID {
+                deferredBatchText[areaID, default: []].append(trimmed)
+            } else if let area = draft.areas.first(where: { $0.id == areaID }) {
+                area.note = Self.joinNotes(area.note, trimmed)
+                if draft.activeAreaID == areaID, !pendingNewArea {
+                    dictation.syncBatchNote(area.note)
+                }
+                refreshRecognitionContext()
+            }
+        }
+
+        refreshTexts()
+        updateHUD()
+    }
+
+    private func applyDeferredBatchText(to areaID: UUID) {
+        guard let parts = deferredBatchText.removeValue(forKey: areaID),
+              !parts.isEmpty,
+              let area = draft.areas.first(where: { $0.id == areaID }) else { return }
+        area.note = Self.joinNotes(area.note, parts.joined(separator: " "))
+        if draft.activeAreaID == areaID, !pendingNewArea {
+            dictation.syncBatchNote(area.note)
+        }
+        refreshRecognitionContext()
+    }
+
+    private func applyAllDeferredBatchText() {
+        for areaID in Array(deferredBatchText.keys) {
+            applyDeferredBatchText(to: areaID)
+        }
+    }
+
+    private func waitForBatchQueue() async {
+        while let worker = batchWorker {
+            await worker.value
+        }
+    }
+
+    private func muteListening() {
+        guard dictation.usesBatchTranscription else {
+            dictation.mute()
+            return
+        }
+        guard batchPauseTask == nil else { return }
+
+        dictation.pauseBatchCapture()
+        batchSpeakingAreaID = nil
+        if let activeID = draft.activeAreaID {
+            enqueueCurrentBatchAudio(for: activeID, reason: "mute")
+        } else {
+            holdCurrentBatchAudio(reason: "mute without area")
+        }
+        batchChunkHasSpeech = false
+        refreshTexts()
+
+        batchPauseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.waitForBatchQueue()
+            guard !Task.isCancelled, !self.isEnded else { return }
+            self.dictation.completeBatchPause()
+            self.batchPauseTask = nil
+        }
+    }
+
     private static func joinNotes(_ parts: String...) -> String {
         parts
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -462,8 +790,13 @@ final class LiveMarkupSession: NSResponder {
 
     private func refreshAll() {
         refreshRecognitionContext()
+        let phases = annotationDictationPhases
         for view in views {
-            view.reload(areas: entries(for: view), activeID: draft.activeAreaID)
+            view.reload(
+                areas: entries(for: view),
+                activeID: draft.activeAreaID,
+                dictationPhases: phases
+            )
         }
         updateHUD()
         publishListenFeedback()
@@ -479,8 +812,13 @@ final class LiveMarkupSession: NSResponder {
     }
 
     private func refreshTexts() {
+        let phases = annotationDictationPhases
         for view in views {
-            view.refreshChipTexts(areas: entries(for: view), activeID: draft.activeAreaID)
+            view.refreshChipTexts(
+                areas: entries(for: view),
+                activeID: draft.activeAreaID,
+                dictationPhases: phases
+            )
         }
     }
 
@@ -579,6 +917,12 @@ final class LiveMarkupSession: NSResponder {
             window.invalidateCursorRects(for: view)
         }
         pushCrosshairIfNeeded()
+    }
+
+    private func setSessionInteractionEnabled(_ isEnabled: Bool) {
+        for view in views {
+            view.setSessionInteractionEnabled(isEnabled)
+        }
     }
 
     private func startActivationObserver() {

@@ -56,6 +56,15 @@ struct CapturedAudio: Sendable {
     }
 }
 
+/// One immutable batch-ASR boundary. Keeping the capture timestamp with the
+/// samples makes latency logging correct even when several area-bound slices
+/// wait in the Parakeet queue.
+struct BatchTranscriptionSlice: Sendable {
+    let audio: CapturedAudio
+    let requestedAt: CFAbsoluteTime
+    let containsLikelySpeech: Bool
+}
+
 struct TranscriptionResult: Sendable {
     var text: String
     var alternatives: [String]

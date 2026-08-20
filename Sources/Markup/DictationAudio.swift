@@ -80,6 +80,23 @@ enum DictationAudioFormat {
     }
 }
 
+extension CapturedAudio {
+    /// Synchronous signal check attached to the exact samples being cut. UI
+    /// level callbacks arrive asynchronously and are therefore not safe for
+    /// deciding whether a mouse-up/retarget slice may be discarded.
+    var containsLikelySpeech: Bool {
+        guard !samples.isEmpty else { return false }
+        var rms: Float = 0
+        var peak: Float = 0
+        samples.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            vDSP_rmsqv(baseAddress, 1, &rms, vDSP_Length(buffer.count))
+            vDSP_maxmgv(baseAddress, 1, &peak, vDSP_Length(buffer.count))
+        }
+        return rms * 0.62 + peak * 0.38 >= 0.0035
+    }
+}
+
 final class PCMBufferConverter {
     private let converter: AVAudioConverter
     private let outputFormat: AVAudioFormat
@@ -134,11 +151,17 @@ final class PCMBufferConverter {
 
 /// Collects 16 kHz mono Float32 samples from the mic tap for batch ASR.
 final class PCMSampleAccumulator: @unchecked Sendable {
+    struct Capture: Sendable {
+        let audio: CapturedAudio
+        let containsLikelySpeech: Bool
+    }
+
     private let lock = NSLock()
     private var samples: [Float] = []
     private let inputFormat: AVAudioFormat
     private let outputFormat: AVAudioFormat
     private var converter: PCMBufferConverter?
+    private var hasSeenLikelySpeech = false
 
     init?(from inputFormat: AVAudioFormat, outputFormat: AVAudioFormat) {
         self.inputFormat = inputFormat
@@ -163,10 +186,10 @@ final class PCMSampleAccumulator: @unchecked Sendable {
             converted = DictationAudioFormat.copyPCMBuffer(buffer)
         }
         guard let converted else { return }
-        samples.append(contentsOf: DictationAudioFormat.floatSamples(from: converted))
+        appendSamples(DictationAudioFormat.floatSamples(from: converted))
     }
 
-    func take() -> CapturedAudio {
+    func take() -> Capture {
         lock.lock()
         defer { lock.unlock() }
         if converter != nil {
@@ -174,7 +197,7 @@ final class PCMSampleAccumulator: @unchecked Sendable {
             // it so later areas keep receiving resampled mic audio.
             if let converter {
                 for leftover in converter.drain() {
-                    samples.append(contentsOf: DictationAudioFormat.floatSamples(from: leftover))
+                    appendSamples(DictationAudioFormat.floatSamples(from: leftover))
                 }
             }
             if let refreshed = PCMBufferConverter(from: inputFormat, to: outputFormat) {
@@ -182,9 +205,31 @@ final class PCMSampleAccumulator: @unchecked Sendable {
             }
         }
         let taken = samples
+        let containedLikelySpeech = hasSeenLikelySpeech
         samples = []
         samples.reserveCapacity(taken.capacity)
-        return CapturedAudio(samples: taken, sampleRate: outputFormat.sampleRate)
+        hasSeenLikelySpeech = false
+        return Capture(
+            audio: CapturedAudio(samples: taken, sampleRate: outputFormat.sampleRate),
+            containsLikelySpeech: containedLikelySpeech
+        )
+    }
+
+    private func appendSamples(_ addition: [Float]) {
+        guard !addition.isEmpty else { return }
+        if CapturedAudio(samples: addition, sampleRate: outputFormat.sampleRate).containsLikelySpeech {
+            hasSeenLikelySpeech = true
+        }
+        samples.append(contentsOf: addition)
+
+        // Before speech begins, retain only enough room for word-leading
+        // consonants. This keeps idle sessions from sending minutes of silence
+        // through Parakeet when the first annotation is finally released.
+        guard !hasSeenLikelySpeech else { return }
+        let preRollCount = Int(outputFormat.sampleRate * 0.35)
+        if samples.count > preRollCount {
+            samples.removeFirst(samples.count - preRollCount)
+        }
     }
 }
 

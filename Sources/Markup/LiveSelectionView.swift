@@ -1,6 +1,18 @@
 import AppKit
 import SwiftUI
 
+enum AnnotationDictationPhase {
+    case listening
+    case transcribing
+
+    var statusText: String {
+        switch self {
+        case .listening: return "Listening…"
+        case .transcribing: return "Transcribing…"
+        }
+    }
+}
+
 /// One transparent, full-screen view per display during a live session.
 /// There is no screenshot and no dimmed chrome underneath — the desktop
 /// stays live, and this view only carries the glass panes, caption chips,
@@ -47,6 +59,7 @@ final class LiveSelectionView: NSView {
     private var dragStart: NSPoint?
     private var pressedAreaID: UUID?
     private var isDraggingSelection = false
+    private var isSessionInteractionEnabled = true
     private var cursorTrackingArea: NSTrackingArea?
     private var selectionRect: NSRect? {
         didSet { updatePreviewPane() }
@@ -76,6 +89,16 @@ final class LiveSelectionView: NSView {
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard isSessionInteractionEnabled else {
+            // Keep the full-screen overlay hit-testable while Save is waiting
+            // on ASR so clicks are swallowed instead of reaching the app that
+            // is about to be captured.
+            return bounds.contains(point) ? self : nil
+        }
+        return super.hitTest(point)
     }
 
     override var mouseDownCanMoveWindow: Bool {
@@ -120,6 +143,7 @@ final class LiveSelectionView: NSView {
     // MARK: - Mouse
 
     override func mouseDown(with event: NSEvent) {
+        guard isSessionInteractionEnabled else { return }
         window?.makeKey()
         window?.makeFirstResponder(self)
         NSCursor.crosshair.set()
@@ -133,6 +157,7 @@ final class LiveSelectionView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard isSessionInteractionEnabled else { return }
         guard let dragStart else { return }
 
         let point = convert(event.locationInWindow, from: nil)
@@ -156,11 +181,12 @@ final class LiveSelectionView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        guard isSessionInteractionEnabled else {
+            cancelSelectionGesture()
+            return
+        }
         defer {
-            dragStart = nil
-            pressedAreaID = nil
-            isDraggingSelection = false
-            selectionRect = nil
+            cancelSelectionGesture()
         }
 
         let point = convert(event.locationInWindow, from: nil)
@@ -189,7 +215,11 @@ final class LiveSelectionView: NSView {
 
     /// Rebuilds panes, strokes, and chips for the areas assigned to this
     /// view's screen. Called by the session whenever areas change.
-    func reload(areas: [(area: MarkupArea, index: Int)], activeID: UUID?) {
+    func reload(
+        areas: [(area: MarkupArea, index: Int)],
+        activeID: UUID?,
+        dictationPhases: [UUID: AnnotationDictationPhase] = [:]
+    ) {
         var seen = Set<UUID>()
 
         for entry in areas {
@@ -198,7 +228,13 @@ final class LiveSelectionView: NSView {
             let layer = ensureLayer(for: area)
             let localRect = localRect(forGlobalCG: area.globalRect)
             layer.localRect = localRect
-            layoutLayer(layer, area: area, index: entry.index, isActive: area.id == activeID)
+            layoutLayer(
+                layer,
+                area: area,
+                index: entry.index,
+                isActive: area.id == activeID,
+                dictationPhase: dictationPhases[area.id]
+            )
         }
 
         for (id, layer) in layers where !seen.contains(id) {
@@ -214,12 +250,22 @@ final class LiveSelectionView: NSView {
 
     /// Text-only refresh so live transcription does not rebuild layout or
     /// interrupt wave animations.
-    func refreshChipTexts(areas: [(area: MarkupArea, index: Int)], activeID: UUID?) {
+    func refreshChipTexts(
+        areas: [(area: MarkupArea, index: Int)],
+        activeID: UUID?,
+        dictationPhases: [UUID: AnnotationDictationPhase] = [:]
+    ) {
         NSAnimationContext.beginGrouping()
         NSAnimationContext.current.duration = 0
         for entry in areas {
             guard let layer = layers[entry.area.id] else { continue }
-            applyChipContent(layer.chip, area: entry.area, index: entry.index, isActive: entry.area.id == activeID)
+            applyChipContent(
+                layer.chip,
+                area: entry.area,
+                index: entry.index,
+                isActive: entry.area.id == activeID,
+                dictationPhase: dictationPhases[entry.area.id]
+            )
             positionChip(layer)
         }
         NSAnimationContext.endGrouping()
@@ -250,6 +296,20 @@ final class LiveSelectionView: NSView {
 
     func endNoteEditing() {
         window?.makeFirstResponder(self)
+    }
+
+    func setSessionInteractionEnabled(_ isEnabled: Bool) {
+        isSessionInteractionEnabled = isEnabled
+        if !isEnabled {
+            cancelSelectionGesture()
+        }
+    }
+
+    private func cancelSelectionGesture() {
+        dragStart = nil
+        pressedAreaID = nil
+        isDraggingSelection = false
+        selectionRect = nil
     }
 
     // MARK: - Layers
@@ -285,7 +345,13 @@ final class LiveSelectionView: NSView {
         return layer
     }
 
-    private func layoutLayer(_ layer: AreaLayer, area: MarkupArea, index: Int, isActive: Bool) {
+    private func layoutLayer(
+        _ layer: AreaLayer,
+        area: MarkupArea,
+        index: Int,
+        isActive: Bool,
+        dictationPhase: AnnotationDictationPhase?
+    ) {
         NSAnimationContext.beginGrouping()
         NSAnimationContext.current.duration = 0
 
@@ -306,20 +372,33 @@ final class LiveSelectionView: NSView {
         layer.stroke.frame = selection.insetBy(dx: -1.5, dy: -1.5)
         layer.stroke.isHidden = !isActive
 
-        applyChipContent(layer.chip, area: area, index: index, isActive: isActive)
+        applyChipContent(
+            layer.chip,
+            area: area,
+            index: index,
+            isActive: isActive,
+            dictationPhase: dictationPhase
+        )
         positionChip(layer)
 
         NSAnimationContext.endGrouping()
     }
 
-    private func applyChipContent(_ chip: AreaChipView, area: MarkupArea, index: Int, isActive: Bool) {
+    private func applyChipContent(
+        _ chip: AreaChipView,
+        area: MarkupArea,
+        index: Int,
+        isActive: Bool,
+        dictationPhase: AnnotationDictationPhase?
+    ) {
         chip.update(
             index: index,
             title: area.displayName,
             note: area.note,
             volatileNote: area.volatileNote,
             isActive: isActive,
-            needsNote: !area.hasNote
+            needsNote: !area.hasNote,
+            dictationPhase: dictationPhase
         )
     }
 
@@ -567,9 +646,11 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
     private var isApplyingDisplay = false
     private var lastNote = ""
     private var lastVolatile = ""
+    private var lastDictationPhase: AnnotationDictationPhase?
 
     private static let horizontalInset: CGFloat = 14
     private static let verticalInset: CGFloat = 12
+    private static let notePlaceholder = "Say or type what should change…"
 
     init() {
         super.init(frame: .zero)
@@ -594,7 +675,8 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         note: String,
         volatileNote: String,
         isActive: Bool,
-        needsNote: Bool
+        needsNote: Bool,
+        dictationPhase: AnnotationDictationPhase?
     ) {
         indexBadge.stringValue = "\(index)"
         titleLabel.stringValue = title
@@ -612,6 +694,7 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
 
         lastNote = note
         lastVolatile = volatileNote
+        lastDictationPhase = dictationPhase
         guard !isEditingNote else { return }
         applyNoteDisplay()
     }
@@ -656,6 +739,8 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         decodeView.setTranscript(committed: "", volatile: "")
         noteField.textColor = .labelColor
         noteField.stringValue = lastNote
+        noteField.placeholderString = Self.notePlaceholder
+        noteField.setAccessibilityHelp(nil)
         onEditingChanged?(true)
     }
 
@@ -683,6 +768,19 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
             decodeView.setTranscript(committed: "", volatile: "")
             noteField.textColor = .labelColor
             noteField.stringValue = lastNote
+            noteField.placeholderString = Self.notePlaceholder
+            noteField.setAccessibilityHelp(nil)
+            refreshNoteHeight()
+            return
+        }
+
+        if let phase = lastDictationPhase {
+            noteField.stringValue = lastNote
+            noteField.placeholderString = nil
+            noteField.textColor = .clear
+            noteField.setAccessibilityHelp(phase.statusText)
+            decodeView.isHidden = false
+            decodeView.setIndeterminate(committed: lastNote, status: phase.statusText)
             refreshNoteHeight()
             return
         }
@@ -692,20 +790,25 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
             decodeView.setTranscript(committed: "", volatile: "")
             noteField.textColor = .labelColor
             noteField.stringValue = lastNote
+            noteField.placeholderString = Self.notePlaceholder
+            noteField.setAccessibilityHelp(nil)
             refreshNoteHeight()
             return
         }
 
         let combined = displayedNoteText
         noteField.stringValue = combined
+        noteField.placeholderString = Self.notePlaceholder
         noteField.textColor = .clear
+        noteField.setAccessibilityHelp(nil)
         decodeView.isHidden = false
         decodeView.setTranscript(committed: lastNote, volatile: lastVolatile)
         refreshNoteHeight()
     }
 
     private var displayedNoteText: String {
-        [lastNote, lastVolatile]
+        let trailing = isEditingNote ? "" : (lastDictationPhase?.statusText ?? lastVolatile)
+        return [lastNote, trailing]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
             .joined(separator: " ")
@@ -725,7 +828,12 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         let cellHeight = noteField.cell?.cellSize(
             forBounds: NSRect(x: 0, y: 0, width: wrap, height: 10_000)
         ).height ?? 0
-        let measured = max(ceil(cellHeight), Self.height(of: sample, font: noteFont, width: wrap))
+        let decodeHeight = decodeView.isHidden ? 0 : ceil(decodeView.intrinsicContentSize.height)
+        let measured = max(
+            ceil(cellHeight),
+            Self.height(of: sample, font: noteFont, width: wrap),
+            decodeHeight
+        )
         let line = ceil(noteFont.ascender - noteFont.descender + noteFont.leading)
         let minNote = max(line * 2, 40)
         noteHeightConstraint?.constant = max(measured, minNote)
@@ -773,7 +881,7 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         header.alignment = .centerY
         header.spacing = 8
 
-        noteField.placeholderString = "Say or type what should change…"
+        noteField.placeholderString = Self.notePlaceholder
         noteField.font = noteFont
         noteField.isBordered = false
         noteField.drawsBackground = false
@@ -792,6 +900,11 @@ final class AreaChipView: NSGlassEffectView, NSTextFieldDelegate {
         decodeView.font = noteFont
         decodeView.preferredMaxLayoutWidth = noteField.preferredMaxLayoutWidth
         decodeView.isHidden = true
+        decodeView.onIntrinsicSizeInvalidated = { [weak self] in
+            guard let self else { return }
+            self.refreshNoteHeight()
+            self.onSizeInvalidated?()
+        }
 
         let height = noteField.heightAnchor.constraint(equalToConstant: 36)
         height.priority = .required
