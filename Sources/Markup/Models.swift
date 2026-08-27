@@ -86,6 +86,31 @@ struct BrowserPageContext: Codable, Equatable {
     var routeName: String
 }
 
+/// An app running inside a host window such as Simulator or Android Emulator.
+/// `routeKey` is either `simulator:<guest-bundle-id>` (remembered) or a
+/// `hosted-ask:` key that forces a save-time folder prompt.
+struct HostedAppContext: Codable, Equatable {
+    static let ephemeralRoutePrefix = "hosted-ask:"
+    static let simulatorKind = "simulator"
+    static let androidEmulatorKind = "android-emulator"
+
+    var hostKind: String
+    var hostBundleId: String
+    var deviceName: String?
+    var guestBundleId: String?
+    var guestName: String?
+    var routeKey: String
+    var routeName: String
+
+    var persistRoute: Bool {
+        !routeKey.hasPrefix(Self.ephemeralRoutePrefix)
+    }
+
+    static func isEphemeralRouteKey(_ key: String) -> Bool {
+        key.hasPrefix(ephemeralRoutePrefix)
+    }
+}
+
 /// The window an area was drawn on top of, resolved by hit-testing the
 /// on-screen window list at the drag origin (front-to-back). `nil` owner
 /// means the area sits on the desktop (or on nothing routable).
@@ -98,13 +123,14 @@ struct AreaOwner {
     /// Global CG coordinates (origin at the top-left of the primary display).
     var windowBounds: CGRect
     var browserPage: BrowserPageContext?
+    var hostedApp: HostedAppContext?
 
     var routeKey: String {
-        browserPage?.routeKey ?? bundleId
+        hostedApp?.routeKey ?? browserPage?.routeKey ?? bundleId
     }
 
     var routeName: String {
-        browserPage?.routeName ?? appName
+        hostedApp?.routeName ?? browserPage?.routeName ?? appName
     }
 }
 
@@ -137,7 +163,7 @@ final class MarkupArea {
     }
 
     var displayName: String {
-        owner?.appName ?? "Desktop"
+        owner?.hostedApp?.guestName ?? owner?.appName ?? "Desktop"
     }
 
     var hasNote: Bool {
@@ -296,6 +322,7 @@ struct FeedbackMetadata: Codable {
         var visibleText: [String]?
         var app: AppMetadata
         var browser: BrowserPageContext?
+        var hostedApp: HostedAppContext?
         var capture: CaptureMetadata
         var assets: CaptureAssetsMetadata
     }
@@ -305,6 +332,7 @@ struct FeedbackMetadata: Codable {
     var createdAt: String
     var app: AppMetadata
     var browser: BrowserPageContext?
+    var hostedApp: HostedAppContext?
     var project: ProjectMetadata
     var capture: CaptureMetadata
     var assets: AssetsMetadata

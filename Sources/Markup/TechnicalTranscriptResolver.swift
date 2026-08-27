@@ -125,6 +125,16 @@ struct TechnicalTranscriptResolver {
                         }
                     }
                 }
+                if let hosted = owner.hostedApp {
+                    add(hosted.routeName)
+                    if let guestName = hosted.guestName {
+                        add(guestName)
+                        for token in words(in: guestName) { add(token) }
+                    }
+                    if let deviceName = hosted.deviceName {
+                        for token in words(in: deviceName) { add(token) }
+                    }
+                }
             }
             for token in words(in: area.note) { add(token) }
         }

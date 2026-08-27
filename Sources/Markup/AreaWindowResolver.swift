@@ -51,19 +51,25 @@ enum AreaWindowResolver {
         let app = NSRunningApplication(processIdentifier: window.processIdentifier)
         let appName = app?.localizedName ?? window.appName
         let title = window.windowTitle.isEmpty ? appName : window.windowTitle
-
-        var browserPage: BrowserPageContext?
+        let target: RouteTarget
         if let app {
-            browserPage = BrowserPageContextResolver.context(
+            target = RouteTargetResolver.target(
                 for: app,
-                appName: appName,
+                windowTitle: title,
+                windowBounds: window.bounds
+            )
+        } else {
+            target = RouteTargetResolver.target(
                 bundleId: window.bundleId,
-                windowTitle: title
+                appName: appName,
+                windowTitle: title,
+                windowBounds: window.bounds,
+                processIdentifier: window.processIdentifier
             )
         }
 
         NSLog(
-            "Markup: area owner \(appName) pid=\(window.processIdentifier) title='\(window.windowTitle)' bounds=\(NSStringFromRect(window.bounds))"
+            "Markup: area owner \(target.name) route=\(target.key) pid=\(window.processIdentifier) title='\(window.windowTitle)' bounds=\(NSStringFromRect(window.bounds))"
         )
 
         return AreaOwner(
@@ -73,8 +79,15 @@ enum AreaWindowResolver {
             processIdentifier: window.processIdentifier,
             windowID: window.windowID,
             windowBounds: window.bounds,
-            browserPage: browserPage
+            browserPage: target.browserPage,
+            hostedApp: target.hostedApp
         )
+    }
+
+    /// Frontmost plausible window of `pid`, used when Settings or the menu
+    /// bar need a title/bounds for the app that is currently focused.
+    static func frontmostContentWindow(for pid: pid_t) -> ResolvedAreaWindow? {
+        onScreenWindows().first { $0.processIdentifier == pid }
     }
 
     /// Frontmost plausible window at the probe. Untitled full-display
