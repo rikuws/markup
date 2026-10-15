@@ -4,9 +4,9 @@
 
 Markup is a **macOS 26+** SwiftPM menu bar app (`Package.swift` platform `.macOS("26.0")`, `LSMinimumSystemVersion` 26.0). Live selection uses `NSGlassEffectView` (Liquid Glass). Cursor Cloud Agent VMs are **Linux** and cannot compile or launch `Markup.app`.
 
-Do not install Swift, Xcode, or macOS SDKs on this VM, and do not run `swift build`, `./scripts/build-app.sh`, or `./scripts/package-app.sh` here. Those commands belong on a Mac or on GitHub Actions (`macos-latest` in `.github/workflows/release.yml`). Canonical local-Mac commands are in the README Development section.
+Do not install Swift, Xcode, or macOS SDKs on this VM, and do not run `swift build`, `swift test`, `./scripts/build-app.sh`, or `./scripts/package-app.sh` here. Those commands belong on a Mac or on GitHub Actions (`macos-latest` in `.github/workflows/release.yml`). Canonical local-Mac commands are in the README Development section.
 
-There is **no** in-repo test target, linter config, or long-running service. Nothing should be started in `start` / `terminals` for this repository.
+The `MarkupTests` XCTest target covers destination settings migration and persistence, routing isolation, and cloud-delivery behavior. Run `swift test` on a Mac with macOS 26 or newer. Tests use temporary files and mocked services; they must not use personal credentials or create real issues. There is no linter config or long-running service. Nothing should be started in `start` / `terminals` for this repository.
 
 What Cloud Agents *can* do:
 

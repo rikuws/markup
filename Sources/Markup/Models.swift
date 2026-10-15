@@ -50,6 +50,11 @@ struct AppRoute: Codable, Identifiable, Equatable {
 struct MarkupSettings: Codable, Equatable {
     var hotKey = HotKeySettings()
     var routes: [AppRoute] = []
+    var destinations: [FeedbackDestination] = []
+    /// A missing entry means local. Only an explicit, successful save changes this.
+    var destinationByRoute: [String: UUID] = [:]
+    /// Recovery locations are independent of app routing, including unidentified guests.
+    var recentDeliveryBundles: [String] = []
     var topNotchEnabled = true
     /// Prototype switch between Apple SpeechAnalyzer and Parakeet TDT v3.
     var dictationEngine: TranscriptionEngineKind = .appleSpeech
@@ -59,6 +64,9 @@ struct MarkupSettings: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case hotKey
         case routes
+        case destinations
+        case destinationByRoute
+        case recentDeliveryBundles
         case topNotchEnabled
         case dictationEngine
     }
@@ -67,6 +75,9 @@ struct MarkupSettings: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hotKey = try container.decodeIfPresent(HotKeySettings.self, forKey: .hotKey) ?? HotKeySettings()
         routes = try container.decodeIfPresent([AppRoute].self, forKey: .routes) ?? []
+        destinations = try container.decodeIfPresent([FeedbackDestination].self, forKey: .destinations) ?? []
+        destinationByRoute = try container.decodeIfPresent([String: UUID].self, forKey: .destinationByRoute) ?? [:]
+        recentDeliveryBundles = try container.decodeIfPresent([String].self, forKey: .recentDeliveryBundles) ?? []
         topNotchEnabled = try container.decodeIfPresent(Bool.self, forKey: .topNotchEnabled) ?? true
         dictationEngine = try container.decodeIfPresent(TranscriptionEngineKind.self, forKey: .dictationEngine) ?? .appleSpeech
     }

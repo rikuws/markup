@@ -39,6 +39,7 @@ That gives coding agents the same context a human reviewer would want: what app 
 | Save-time capture | Pixels are captured when you save, so you can reproduce the issue live while narrating it. |
 | Per-area routing | Each area detects the app it was drawn on and routes to that app's markup folder — native apps by identity, browser pages by local host, repository, Figma file, Google Doc, or host, and Simulator windows by the app running on the device. |
 | Feedback inbox | Review pending feedback by project, open screenshots, edit notes, reveal folders, or move handled items to Trash. |
+| Destination picker | Save locally or explicitly send to a connected Linear team or Jira Cloud project. Search with `Cmd+K`; successful choices are remembered for each app or page route. |
 | Agent-ready files | Save `instruction.md`, `metadata.json`, screenshots, and originals in the target repo — one bundle per route. |
 
 ## Install
@@ -55,10 +56,23 @@ Markup requires macOS 26 (Tahoe) or newer for its Liquid Glass selection UI. The
 1. Press `Cmd+Shift+M` or choose **Mark Up Screen** from the menu bar item. The screen stays live — glass selection renders directly on top of whatever is running.
 2. Drag a glass area over the issue and say what’s wrong — Markup listens while you mark.
 3. Drag more areas anywhere on the screen. Speech from the moment you start that drag (and after you release) goes only to the new area. Click an existing area (or its caption chip) to add to its note, or type in the chip directly.
-4. Press Return or click Save. Each area's pixels are captured from the live screen, the app under each area is detected, and one bundle is written per project route — prompting for a folder the first time an app is seen, like before. Simulator captures route to the guest app, not to Simulator.app; if Markup can't tell which app is running, it asks where to save.
+4. Press Return, `Cmd+K`, or click Save to capture the marked areas and choose a destination for each app or page route. Use the arrow keys and Return in the picker, or search for a connected workspace, team, or project. Local is the default until you successfully send that route elsewhere. Markup asks for a project folder the first time a route is saved. Simulator captures route to the guest app; when the app cannot be identified, Markup asks where to save without remembering a destination for that device.
 5. Ask your coding agent to process the pending Markup feedback.
 
 The default feedback path is `.markup/feedback`, but each app or browser route can point at a different project root and relative feedback path.
+
+### Linear and Jira destinations
+
+In **Settings → Destinations**, add a Linear or Jira connection, verify it, and choose its team or project. Give it a recognizable name; multiple named destinations can point at different workspaces, teams, projects, or issue types.
+
+- **Linear:** use a personal API key with access to the selected team and permission to create issues and upload files. A project is optional.
+- **Jira Cloud:** enter your `https://your-team.atlassian.net` site, account email, and an API token **without scopes**. Choose a project and issue type. The account needs permission to create issues and add attachments, and the site must allow attachments. Projects requiring additional custom fields may reject creation; Markup keeps the local copy and displays the failure.
+
+Credentials are stored in macOS Keychain, separately from settings and feedback. **Disconnect** deletes the destination and its saved credential from this Mac. The destination menu also links to the provider’s token settings for revoking it everywhere.
+
+A remembered cloud destination is only a suggestion: each save still requires **Send to Linear** or **Send to Jira**. Sending creates an issue with the notes, app/window/page context, marked-region coordinates, and annotated screenshots. These screenshots can include the surrounding app window. Original screenshots and local project paths are kept on this Mac.
+
+Every send first saves the regular local feedback bundle. Delivery progress and the created issue link appear in a separate window. If attachments fail, **Try Again** continues with the recorded issue; it does not create a second one. Reopen **Delivery Details** from an item in the menu bar’s **Feedback Inbox**, or use **Recent Deliveries**, to resume after a relaunch. Recent Deliveries also keeps track of captures from unidentified simulated apps without remembering an app route. If the server’s response to issue creation is lost, Markup asks you to check the destination instead of automatically creating another issue. Delivery receipts live alongside the local bundle in `cloud-delivery.json`.
 
 ## Bundle Format
 
@@ -179,7 +193,7 @@ Keep the private key only in release secrets.
 
 ## Privacy
 
-Markup does not upload captures. Screenshots, notes, and metadata are saved locally in the feedback directory for the configured route. Spoken notes are transcribed on this Mac and are not sent to a network speech service.
+Markup saves screenshots, notes, and metadata locally in the feedback directory for the configured route. Captures are uploaded to Linear or Jira only after you explicitly choose Send in the destination picker. Spoken notes are transcribed on this Mac and are not sent to a network speech service. Credentials stay in Keychain and are never written into feedback bundles.
 
 ## License
 

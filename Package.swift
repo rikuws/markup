@@ -31,6 +31,10 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])
             ]
+        ),
+        .testTarget(
+            name: "MarkupTests",
+            dependencies: ["Markup"]
         )
     ]
 )

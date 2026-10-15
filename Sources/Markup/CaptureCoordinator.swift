@@ -4,17 +4,21 @@ import AppKit
 /// order: the hotkey opens a live glass session immediately (no capture),
 /// and pixels are read from the screen only when the user saves — one
 /// capture per area, grouped into one feedback bundle per route.
+@MainActor
 final class CaptureCoordinator {
     var onSessionStateChanged: ((Bool) -> Void)?
 
     var isSessionActive: Bool {
-        session?.isActive == true
+        session?.isActive == true || deliveryController != nil
     }
+
+    var isDeliveringFeedback: Bool { deliveryController != nil }
 
     private let settingsStore: SettingsStore
     private let capturer = AreaCapturer()
     private let bundleWriter = FeedbackBundleWriter()
     private var session: LiveMarkupSession?
+    private var deliveryController: FeedbackDeliveryController?
 
     init(settingsStore: SettingsStore) {
         self.settingsStore = settingsStore
@@ -23,6 +27,10 @@ final class CaptureCoordinator {
     /// Hotkey and menu entry point: starts a session, or brings the current
     /// one back to the front.
     func captureFeedback() {
+        if let deliveryController {
+            deliveryController.present()
+            return
+        }
         if let session, session.isActive {
             session.refocus()
             return
@@ -32,8 +40,53 @@ final class CaptureCoordinator {
     }
 
     func cancelCurrentFeedback() {
+        if let deliveryController {
+            deliveryController.window?.performClose(nil)
+            return
+        }
         session?.end()
         clearSession()
+    }
+
+    /// Receipts make delivery recoverable from the inbox after closing the
+    /// progress window or relaunching. Opening details never starts an upload.
+    func showDelivery(for bundleURL: URL) {
+        guard session == nil, deliveryController == nil else {
+            captureFeedback()
+            return
+        }
+        do {
+            let receiptURL = bundleURL.appendingPathComponent("cloud-delivery.json")
+            let receipt: CloudDeliveryReceipt?
+            let destinationID: UUID
+            if FileManager.default.fileExists(atPath: receiptURL.path) {
+                let decoded = try JSONDecoder().decode(CloudDeliveryReceipt.self, from: Data(contentsOf: receiptURL))
+                receipt = decoded
+                destinationID = decoded.destinationID
+            } else {
+                struct Attempt: Decodable { let destinationID: UUID }
+                let attempt = try JSONDecoder().decode(Attempt.self, from: Data(contentsOf: bundleURL.appendingPathComponent("cloud-delivery-attempt.json")))
+                receipt = nil
+                destinationID = attempt.destinationID
+            }
+            guard let destination = settingsStore.settings.destinations.first(where: { $0.id == destinationID }) else {
+                throw MarkupError("This destination has been disconnected. The delivery receipt and your feedback remain in the local bundle.")
+            }
+            try receipt?.validate(for: destination)
+            let metadata = try JSONDecoder().decode(FeedbackMetadata.self, from: Data(contentsOf: bundleURL.appendingPathComponent(FeedbackAssetNames.metadata)))
+            let job = FeedbackDeliveryJob(
+                routeKey: metadata.hostedApp?.routeKey ?? metadata.browser?.routeKey ?? metadata.app.bundleId,
+                routeName: metadata.hostedApp?.routeName ?? metadata.browser?.routeName ?? metadata.app.name,
+                bundleURL: bundleURL, destination: destination, receipt: receipt,
+                error: receipt?.complete == true ? nil : receipt == nil
+                    ? "The previous send did not receive a confirmed response. Check \(destination.provider.displayName) for the issue before sending again. Markup will not create a duplicate."
+                    : "This issue was created, but screenshot delivery is unfinished. Try Again resumes the same issue.",
+                canRetry: receipt != nil
+            )
+            presentDelivery(jobs: [job], sendImmediately: false)
+        } catch {
+            showAlert(title: "Could Not Open Delivery", message: error.localizedDescription)
+        }
     }
 
     // MARK: - Session lifecycle
@@ -117,10 +170,25 @@ final class CaptureCoordinator {
             captures.append(capture)
         }
 
-        // Resolve every route before writing anything, prompting for
-        // unknown apps. Cancelling any prompt aborts the save and returns
-        // to the live session.
+        // Choose every destination before writing or uploading anything.
+        // A remembered cloud choice is a suggestion, never upload consent.
         let groups = draft.areasByRoute()
+        var choices: [String: DestinationPickerChoice] = [:]
+        for group in groups {
+            let picker = DestinationPickerController(
+                routeName: group.areas.first?.routeName ?? "Desktop",
+                destinations: settingsStore.settings.destinations,
+                suggestedDestinationID: settingsStore.suggestedDestination(for: group.routeKey)?.id,
+                areaCount: group.areas.count
+            )
+            guard let choice = picker.runModal() else {
+                session.resumeAfterFailedSave()
+                return
+            }
+            choices[group.routeKey] = choice
+        }
+
+        // Every destination keeps the standard local bundle for recovery.
         var routes: [String: AppRoute] = [:]
         for group in groups {
             let sample = group.areas.first
@@ -136,6 +204,7 @@ final class CaptureCoordinator {
         }
 
         var savedURLs: [URL] = []
+        var jobs: [FeedbackDeliveryJob] = []
         do {
             for group in groups {
                 guard let route = routes[group.routeKey] else { continue }
@@ -144,8 +213,17 @@ final class CaptureCoordinator {
                 }
                 let url = try bundleWriter.write(captures: groupCaptures, route: route)
                 savedURLs.append(url)
+                if case .cloud(let destination) = choices[group.routeKey] {
+                    jobs.append(FeedbackDeliveryJob(
+                        routeKey: group.routeKey, routeName: route.appName,
+                        bundleURL: url, destination: destination
+                    ))
+                }
             }
         } catch {
+            // No cloud work has begun. Roll back only this attempt's new
+            // bundles so returning to the draft cannot create duplicates.
+            for url in savedURLs { try? FileManager.default.removeItem(at: url) }
             showAlert(title: "Could Not Save Feedback", message: error.localizedDescription)
             session.resumeAfterFailedSave()
             return
@@ -155,16 +233,39 @@ final class CaptureCoordinator {
             NSLog("Markup: saved feedback bundle to \(url.path)")
             NSWorkspace.shared.noteFileSystemChanged(url.path)
         }
+        for job in jobs { settingsStore.recordDeliveryBundle(job.bundleURL) }
+        for group in groups {
+            if case .local = choices[group.routeKey] {
+                settingsStore.rememberDestination(nil, for: group.routeKey)
+            }
+        }
         NSSound(named: "Glass")?.play()
 
         let lastOwnerPID = draft.activeArea?.owner?.processIdentifier
         session.end()
         clearSession()
 
+        if !jobs.isEmpty {
+            presentDelivery(jobs: jobs, sendImmediately: true)
+            return
+        }
+
         if let lastOwnerPID {
             NSRunningApplication(processIdentifier: lastOwnerPID)?
                 .activate(options: [.activateIgnoringOtherApps])
         }
+    }
+
+    private func presentDelivery(jobs: [FeedbackDeliveryJob], sendImmediately: Bool) {
+        let controller = FeedbackDeliveryController(jobs: jobs, settingsStore: settingsStore)
+        controller.onClose = { [weak self] in
+            self?.deliveryController = nil
+            self?.onSessionStateChanged?(false)
+        }
+        deliveryController = controller
+        onSessionStateChanged?(true)
+        if sendImmediately { controller.model.send() }
+        controller.present()
     }
 
     // MARK: - Routes

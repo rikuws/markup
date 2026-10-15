@@ -70,6 +70,7 @@ final class LiveMarkupSession: NSResponder {
     private var batchPauseTask: Task<Void, Never>?
     private var isEnded = false
     private var isSaving = false
+    private var isSuspended = false
     private var becomeActiveObserver: NSObjectProtocol?
     private var didPushCursor = false
 
@@ -146,6 +147,7 @@ final class LiveMarkupSession: NSResponder {
     /// Commits in-flight dictation, stops the mic, and hides every session
     /// window so save-time captures and prompt panels see a clean screen.
     func suspendForSave() {
+        isSuspended = true
         commitAllVolatile()
         dictation.teardown()
         popCrosshairIfNeeded()
@@ -155,6 +157,7 @@ final class LiveMarkupSession: NSResponder {
     }
 
     func resumeAfterFailedSave() {
+        isSuspended = false
         isSaving = false
         setSessionInteractionEnabled(true)
         activateForSession()
@@ -413,6 +416,13 @@ final class LiveMarkupSession: NSResponder {
 
     private func handleKeyEvent(_ event: NSEvent) -> Bool {
         if isSaving {
+            return true
+        }
+
+        // The destination palette is available even while editing a note.
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers?.lowercased() == "k" {
+            requestSave()
             return true
         }
 
@@ -897,7 +907,7 @@ final class LiveMarkupSession: NSResponder {
     }
 
     private func presentWindows() {
-        guard !isEnded else { return }
+        guard !isEnded, !isSuspended else { return }
 
         for window in windows {
             window.orderFrontRegardless()

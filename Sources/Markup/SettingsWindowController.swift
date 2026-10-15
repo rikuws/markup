@@ -44,11 +44,12 @@ struct SettingsView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     permissionsSection
+                    DestinationSettingsView(settingsStore: settingsStore)
+                    routesSection
+                    hotKeySection
                     updatesSection
                     topNotchSection
                     dictationEngineSection
-                    hotKeySection
-                    routesSection
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 20)
@@ -77,7 +78,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Markup")
                     .font(.system(size: 13, weight: .semibold))
-                Text("Capture settings")
+                Text("Capture & feedback")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -9,10 +9,12 @@ final class StatusBarController: NSObject {
     private let appUpdater: AppUpdater
     private let feedbackInbox = FeedbackInbox()
     private let isSessionActive: () -> Bool
+    private let isDeliveringFeedback: () -> Bool
     private let capture: () -> Void
     private let cancelCurrentFeedback: () -> Void
     private let openSettings: () -> Void
     private let openFeedbackFolder: () -> Void
+    private let showDelivery: (URL) -> Void
     private let quit: () -> Void
     private var settingsCancellable: AnyCancellable?
     private var updaterCancellable: AnyCancellable?
@@ -21,19 +23,23 @@ final class StatusBarController: NSObject {
         settingsStore: SettingsStore,
         appUpdater: AppUpdater,
         isSessionActive: @escaping () -> Bool,
+        isDeliveringFeedback: @escaping () -> Bool,
         capture: @escaping () -> Void,
         cancelCurrentFeedback: @escaping () -> Void,
         openSettings: @escaping () -> Void,
         openFeedbackFolder: @escaping () -> Void,
+        showDelivery: @escaping (URL) -> Void,
         quit: @escaping () -> Void
     ) {
         self.settingsStore = settingsStore
         self.appUpdater = appUpdater
         self.isSessionActive = isSessionActive
+        self.isDeliveringFeedback = isDeliveringFeedback
         self.capture = capture
         self.cancelCurrentFeedback = cancelCurrentFeedback
         self.openSettings = openSettings
         self.openFeedbackFolder = openFeedbackFolder
+        self.showDelivery = showDelivery
         self.quit = quit
 
         captureItem = NSMenuItem(title: "Mark Up Screen", action: #selector(captureSelected), keyEquivalent: "")
@@ -108,7 +114,7 @@ final class StatusBarController: NSObject {
         captureItem.isEnabled = true
         menu.addItem(captureItem)
 
-        if isSessionActive() {
+        if isSessionActive() && !isDeliveringFeedback() {
             let cancelDraftItem = NSMenuItem(title: "Cancel Live Markup", action: #selector(cancelCurrentFeedbackSelected), keyEquivalent: "")
             cancelDraftItem.target = self
             cancelDraftItem.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: nil)
@@ -125,6 +131,7 @@ final class StatusBarController: NSObject {
         menu.addItem(.separator())
 
         menu.addItem(makeInboxMenuItem())
+        if let deliveries = makeRecentDeliveriesMenuItem() { menu.addItem(deliveries) }
 
         menu.addItem(.separator())
 
@@ -151,6 +158,34 @@ final class StatusBarController: NSObject {
         let item = NSMenuItem(title: "Feedback Inbox", action: nil, keyEquivalent: "")
         item.image = NSImage(systemSymbolName: "tray.full", accessibilityDescription: nil)
         item.submenu = makeInboxMenu()
+        item.isEnabled = true
+        return item
+    }
+
+    private func makeRecentDeliveriesMenuItem() -> NSMenuItem? {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for path in settingsStore.settings.recentDeliveryBundles {
+            let url = URL(fileURLWithPath: path, isDirectory: true)
+            guard ["cloud-delivery.json", "cloud-delivery-attempt.json"].contains(where: {
+                FileManager.default.fileExists(atPath: url.appendingPathComponent($0).path)
+            }) else { continue }
+            let receipt = (try? Data(contentsOf: url.appendingPathComponent("cloud-delivery.json")))
+                .flatMap { try? JSONDecoder().decode(CloudDeliveryReceipt.self, from: $0) }
+            let metadata = (try? Data(contentsOf: url.appendingPathComponent(FeedbackAssetNames.metadata)))
+                .flatMap { try? JSONDecoder().decode(FeedbackMetadata.self, from: $0) }
+            let name = metadata?.hostedApp?.routeName ?? metadata?.browser?.routeName ?? metadata?.app.name ?? url.lastPathComponent
+            let status = receipt.flatMap { $0.complete ? $0.issueKey : nil } ?? "Unfinished"
+            let item = NSMenuItem(title: shortMenuTitle("\(status) · \(name)"), action: #selector(showDeliverySelected), keyEquivalent: "")
+            item.target = self
+            item.representedObject = url
+            item.isEnabled = true
+            menu.addItem(item)
+        }
+        guard !menu.items.isEmpty else { return nil }
+        let item = NSMenuItem(title: "Recent Deliveries", action: nil, keyEquivalent: "")
+        item.image = NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: nil)
+        item.submenu = menu
         item.isEnabled = true
         return item
     }
@@ -246,6 +281,17 @@ final class StatusBarController: NSObject {
         revealItem.isEnabled = true
         menu.addItem(revealItem)
 
+        if ["cloud-delivery.json", "cloud-delivery-attempt.json"].contains(where: {
+            FileManager.default.fileExists(atPath: feedback.directoryURL.appendingPathComponent($0).path)
+        }) {
+            let deliveryItem = NSMenuItem(title: "Delivery Details…", action: #selector(showDeliverySelected), keyEquivalent: "")
+            deliveryItem.target = self
+            deliveryItem.image = NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: nil)
+            deliveryItem.representedObject = feedback.directoryURL
+            deliveryItem.isEnabled = true
+            menu.addItem(deliveryItem)
+        }
+
         menu.addItem(.separator())
 
         let deleteItem = NSMenuItem(title: "Move to Trash", action: #selector(deleteFeedbackSelected), keyEquivalent: "")
@@ -269,7 +315,8 @@ final class StatusBarController: NSObject {
     }
 
     private func captureTitle() -> String {
-        isSessionActive()
+        if isDeliveringFeedback() { return "Show Feedback Delivery" }
+        return isSessionActive()
             ? "Show Live Markup"
             : "Mark Up Screen"
     }
@@ -280,6 +327,11 @@ final class StatusBarController: NSObject {
 
     @objc private func captureSelected() {
         capture()
+    }
+
+    @objc private func showDeliverySelected(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        showDelivery(url)
     }
 
     @objc private func cancelCurrentFeedbackSelected() {

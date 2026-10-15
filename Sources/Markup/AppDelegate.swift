@@ -20,10 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsStore: settingsStore,
             appUpdater: appUpdater,
             isSessionActive: { coordinator.isSessionActive },
+            isDeliveringFeedback: { coordinator.isDeliveringFeedback },
             capture: { coordinator.captureFeedback() },
             cancelCurrentFeedback: { coordinator.cancelCurrentFeedback() },
             openSettings: { [weak self] in self?.showSettings() },
             openFeedbackFolder: { [weak self] in self?.openCurrentFeedbackFolder() },
+            showDelivery: { coordinator.showDelivery(for: $0) },
             quit: { NSApp.terminate(nil) }
         )
         statusBarController = status

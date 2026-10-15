@@ -968,7 +968,7 @@ final class SessionHUDView: NSGlassEffectView {
 
     let listeningChip = ListeningChipButton()
     private let hintLabel = NSTextField(labelWithString: "")
-    private let saveButton = NSButton(title: "Save", target: nil, action: nil)
+    private let saveButton = NSButton(title: "Save…", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
 
     init() {
@@ -990,9 +990,9 @@ final class SessionHUDView: NSGlassEffectView {
         if areaCount == 0 {
             hintLabel.stringValue = "Drag to mark an area"
         } else if isListening {
-            hintLabel.stringValue = "\(areaCount) area\(areaCount == 1 ? "" : "s") · Esc mutes · Return saves"
+            hintLabel.stringValue = "\(areaCount) area\(areaCount == 1 ? "" : "s") · Esc mutes · ⌘K destination"
         } else {
-            hintLabel.stringValue = "\(areaCount) area\(areaCount == 1 ? "" : "s") · Esc cancels · Return saves"
+            hintLabel.stringValue = "\(areaCount) area\(areaCount == 1 ? "" : "s") · Esc cancels · ⌘K destination"
         }
     }
 
@@ -1014,6 +1014,7 @@ final class SessionHUDView: NSGlassEffectView {
         saveButton.contentTintColor = .controlAccentColor
         saveButton.target = self
         saveButton.action = #selector(saveClicked)
+        saveButton.toolTip = "Choose where to save feedback (Return or ⌘K)"
 
         let stack = NSStackView(views: [listeningChip, hintLabel, NSView(), cancelButton, saveButton])
         stack.orientation = .horizontal

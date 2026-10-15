@@ -23,9 +23,12 @@ final class FeedbackBundleWriter {
 
         let now = Date()
         let id = makeID(date: now, appName: primary.area.routeName)
-        let directory = route.feedbackDirectoryURL.appendingPathComponent(id, isDirectory: true)
+        let finalDirectory = route.feedbackDirectoryURL.appendingPathComponent(id, isDirectory: true)
+        // The inbox must never see a half-written bundle.
+        let directory = route.feedbackDirectoryURL.appendingPathComponent(".\(id).saving", isDirectory: true)
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
 
         var items: [FeedbackMetadata.CaptureItemMetadata] = []
         for (offset, capture) in captures.enumerated() {
@@ -107,7 +110,8 @@ final class FeedbackBundleWriter {
             encoding: .utf8
         )
 
-        return directory
+        try FileManager.default.moveItem(at: directory, to: finalDirectory)
+        return finalDirectory
     }
 
     private func makeID(date: Date, appName: String) -> String {
